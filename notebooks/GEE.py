@@ -1,208 +1,206 @@
-import pandas as pd
-import numpy as np
-import rasterio
-from scipy.interpolate import griddata
+import ee
+import geemap
 import os
 
-# ==========================================
-# 1. CẤU HÌNH ĐƯỜNG DẪN
-# ==========================================
-PATH_DEM = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/input/DEM_NASADEM_Fixed.tif"
-PATH_WEATHER_CSV = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/output/weather_daily_all_locations.csv"
-OUTPUT_FINAL = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/output/READY_FOR_MODEL/Final_Stacked_Input.tif"
+# =====================
+# INIT
+# =====================
+ee.Initialize(project="landsurface-485908")
 
-os.makedirs(os.path.dirname(OUTPUT_FINAL), exist_ok=True)
+BASE_DIR = "FloodData"
+SCALE = 250  # ~250–500m (OK cho flood ML)
 
-# ==========================================
-# 2. HÀM CHUẨN HÓA (MIN-MAX SCALING)
-# ==========================================
-def normalize(array):
-    array_min, array_max = array.min(), array.max()
-    if array_max - array_min == 0:
-        return array
-    return (array - array_min) / (array_max - array_min)
+# =====================
+# REGIONS
+# =====================
+regions = {
+    "DBSCL": ee.Geometry.Rectangle([104.4, 8.5, 106.8, 11.0]),
+    "CentralCoast": ee.Geometry.Rectangle([107.4, 13.5, 109.5, 16.5])
+}
 
-# ==========================================
-# 3. PIPELINE TỔNG HỢP (ALL-IN-ONE)
-# ==========================================
-def run_full_pipeline(dem_path, csv_path, out_path):
-    print("🚀 Bắt đầu Pipeline tổng hợp dữ liệu...")
+# =====================
+# DATE RANGE
+# =====================
+start_date = ee.Date("2015-01-01")
+end_date   = ee.Date("2025-12-31")
+n_days = end_date.difference(start_date, "day").getInfo()
 
-    # --- BƯỚC A: ĐỌC DEM VÀ TÍNH ĐỊA HÌNH ---
-    with rasterio.open(dem_path) as src:
-        profile = src.profile
-        dem = src.read(1).astype(np.float32)
-        grid_shape = src.shape
-        transform = src.transform
-        res = src.res[0]
+# =====================
+# DATASETS
+# =====================
+DEM  = ee.Image("USGS/SRTMGL1_003")
+FLOW = ee.Image("WWF/HydroSHEDS/15ACC").select("b1")
+LANDCOVER = ee.Image("ESA/WorldCover/v100/2020").select("Map")
 
-        print("  -> Đang tính toán Slope và SeaLevel...")
-        dx, dy = np.gradient(dem, res)
-        slope = np.degrees(np.arctan(np.sqrt(dx**2 + dy**2)))
-        sea_level = (dem < 2.5).astype(np.float32)
+RAIN_IC = ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+SOIL_IC = ee.ImageCollection("NASA/SMAP/SPL4SMGP/007")
 
-        # Tạo grid tọa độ (Chỉ làm 1 lần)
-        rows, cols = np.indices(grid_shape)
-        lons, lats = rasterio.transform.xy(transform, rows.flatten(), cols.flatten())
-        grid_points = np.array([lons, lats]).T
+# Permanent water mask
+PERM_WATER = (
+    ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+    .select("occurrence")
+    .gt(90)
+)
 
-    # --- BƯỚC B: XỬ LÝ DỮ LIỆU THỜI TIẾT ---
-    print("  -> Đang xử lý dữ liệu từ CSV...")
-    df = pd.read_csv(csv_path)
-    # Lấy trung bình để tạo ảnh tĩnh (Dễ thay đổi nếu bạn muốn làm theo ngày)
-    df_grouped = df.groupby(['location', 'latitude', 'longitude']).mean(numeric_only=True).reset_index()
-    points = df_grouped[['longitude', 'latitude']].values
-    
-    weather_cols = [
-        'precipitation_sum', 
-        'humidity_mean', 
-        'soil_moisture_0_7cm', 
-        'soil_moisture_7_28cm'
-    ]
+# =====================
+# FUNCTION: DAILY FLOOD LABEL (Sentinel-1)
+# =====================
+def sentinel1_flood_mask(region, start, end):
+    s1 = (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(region)
+        .filterDate(start, end)
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        .filter(ee.Filter.eq("orbitProperties_pass", "DESCENDING"))
+        .select("VV")
+    )
 
-    # --- BƯỚC C: GHI FILE ĐA BĂNG (7 BANDS) ---
-    # Cập nhật profile: 7 lớp, kiểu float32
-    profile.update(count=3 + len(weather_cols), dtype=rasterio.float32)
+    if s1.size().getInfo() == 0:
+        return None
 
-    with rasterio.open(out_path, 'w', **profile) as dst:
-        # Ghi các lớp địa hình (Đã chuẩn hóa)
-        print("  -> Đang ghi Band 1: Elevation")
-        dst.write(normalize(dem), 1)
-        
-        print("  -> Đang ghi Band 2: Slope")
-        dst.write(normalize(slope), 2)
-        
-        print("  -> Đang ghi Band 3: SeaLevel Risk")
-        dst.write(sea_level, 3) # SeaLevel là 0/1 nên không cần normalize thêm
+    img = s1.mean()
 
-        # Nội suy và ghi các lớp thời tiết
-        for i, col in enumerate(weather_cols):
-            print(f"  -> Đang nội suy & ghi Band {i+4}: {col}")
-            vals = df_grouped[col].values
-            
-            # Nội suy linear
-            grid_vals = griddata(points, vals, grid_points, method='linear')
-            grid_vals = np.nan_to_num(grid_vals, nan=0.0)
-            
-            # Reshape và chuẩn hóa
-            final_band = grid_vals.reshape(grid_shape).astype(np.float32)
-            dst.write(normalize(final_band), i + 4)
+    # Speckle reduction
+    img = img.focal_mean(radius=50, units="meters")
 
-    print("\n" + "="*40)
-    print(f"🎉 HOÀN THÀNH!")
-    print(f"📂 File gộp 7-bands: {out_path}")
-    print("Thứ tự Band: 1.Elev, 2.Slope, 3.SeaLevel, 4.Rain, 5.Humid, 6.Soil0-7, 7.Soil7-28")
-    print("="*40)
+    flood = (
+        img.lt(-15)
+        .And(PERM_WATER.Not())
+    )
 
-# ==========================================
-# THỰC THI
-# ==========================================
-if __name__ == "__main__":
-    try:
-        run_full_pipeline(PATH_DEM, PATH_WEATHER_CSV, OUTPUT_FINAL)
-    except Exception as e:
-        print(f"❌ LỖI: {e}")
-import pandas as pd
-import numpy as np
-import rasterio
-from scipy.interpolate import griddata
-import os
+    return flood.rename("FloodMask")
 
-# ==========================================
-# 1. CẤU HÌNH ĐƯỜNG DẪN
-# ==========================================
-PATH_DEM = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/input/DEM_NASADEM_Fixed.tif"
-PATH_WEATHER_CSV = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/output/weather_daily_all_locations.csv"
-OUTPUT_FINAL = "C:/Users/Administrator/2026/FPT_AIO20A02/DAP391m/data/output/READY_FOR_MODEL/Final_Stacked_Input.tif"
+# =====================
+# FUNCTION: STATIC FLOOD SUSCEPTIBILITY (PRIOR)
+# =====================
+def flood_susceptibility(region):
+    dem = DEM.clip(region)
+    flow = FLOW.clip(region)
 
-os.makedirs(os.path.dirname(OUTPUT_FINAL), exist_ok=True)
+    dem_norm  = dem.unitScale(-5, 50)
+    flow_norm = flow.log10().unitScale(0, 5)
 
-# ==========================================
-# 2. HÀM CHUẨN HÓA (MIN-MAX SCALING)
-# ==========================================
-def normalize(array):
-    array_min, array_max = array.min(), array.max()
-    if array_max - array_min == 0:
-        return array
-    return (array - array_min) / (array_max - array_min)
+    flood_sus = (
+        dem_norm.multiply(0.4)
+        .add(flow_norm.multiply(0.6))
+    )
 
-# ==========================================
-# 3. PIPELINE TỔNG HỢP (ALL-IN-ONE)
-# ==========================================
-def run_full_pipeline(dem_path, csv_path, out_path):
-    print("🚀 Bắt đầu Pipeline tổng hợp dữ liệu...")
+    return flood_sus.rename("FloodSusceptibility")
 
-    # --- BƯỚC A: ĐỌC DEM VÀ TÍNH ĐỊA HÌNH ---
-    with rasterio.open(dem_path) as src:
-        profile = src.profile
-        dem = src.read(1).astype(np.float32)
-        grid_shape = src.shape
-        transform = src.transform
-        res = src.res[0]
+# =====================
+# MAIN LOOP
+# =====================
+for region_name, region in regions.items():
+    print(f"\n🚀 Processing region: {region_name}")
 
-        print("  -> Đang tính toán Slope và SeaLevel...")
-        dx, dy = np.gradient(dem, res)
-        slope = np.degrees(np.arctan(np.sqrt(dx**2 + dy**2)))
-        sea_level = (dem < 2.5).astype(np.float32)
+    REGION_DIR = os.path.join(BASE_DIR, region_name)
+    STATIC_DIR = os.path.join(REGION_DIR, "Static")
+    DAILY_DIR  = os.path.join(REGION_DIR, "Daily")
+    LABEL_DIR  = os.path.join(REGION_DIR, "LabelDaily")
 
-        # Tạo grid tọa độ (Chỉ làm 1 lần)
-        rows, cols = np.indices(grid_shape)
-        lons, lats = rasterio.transform.xy(transform, rows.flatten(), cols.flatten())
-        grid_points = np.array([lons, lats]).T
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    os.makedirs(DAILY_DIR, exist_ok=True)
+    os.makedirs(LABEL_DIR, exist_ok=True)
 
-    # --- BƯỚC B: XỬ LÝ DỮ LIỆU THỜI TIẾT ---
-    print("  -> Đang xử lý dữ liệu từ CSV...")
-    df = pd.read_csv(csv_path)
-    # Lấy trung bình để tạo ảnh tĩnh (Dễ thay đổi nếu bạn muốn làm theo ngày)
-    df_grouped = df.groupby(['location', 'latitude', 'longitude']).mean(numeric_only=True).reset_index()
-    points = df_grouped[['longitude', 'latitude']].values
-    
-    weather_cols = [
-        'precipitation_sum', 
-        'humidity_mean', 
-        'soil_moisture_0_7cm', 
-        'soil_moisture_7_28cm'
-    ]
+    # =====================
+    # 1. STATIC FEATURES
+    # =====================
+    dem = DEM.clip(region).unmask(0)
+    slope = ee.Terrain.slope(dem)
+    flow = FLOW.clip(region).add(1).log10().unitScale(0, 5)
+    lc = LANDCOVER.clip(region)
 
-    # --- BƯỚC C: GHI FILE ĐA BĂNG (7 BANDS) ---
-    # Cập nhật profile: 7 lớp, kiểu float32
-    profile.update(count=3 + len(weather_cols), dtype=rasterio.float32)
+    geemap.ee_export_image(dem,   f"{STATIC_DIR}/DEM.tif", scale=SCALE, region=region)
+    geemap.ee_export_image(slope, f"{STATIC_DIR}/Slope.tif", scale=SCALE, region=region)
+    geemap.ee_export_image(flow,  f"{STATIC_DIR}/FlowAccumulation.tif", scale=SCALE, region=region)
+    geemap.ee_export_image(lc,    f"{STATIC_DIR}/LandCover.tif", scale=SCALE, region=region)
 
-    with rasterio.open(out_path, 'w', **profile) as dst:
-        # Ghi các lớp địa hình (Đã chuẩn hóa)
-        print("  -> Đang ghi Band 1: Elevation")
-        dst.write(normalize(dem), 1)
-        
-        print("  -> Đang ghi Band 2: Slope")
-        dst.write(normalize(slope), 2)
-        
-        print("  -> Đang ghi Band 3: SeaLevel Risk")
-        dst.write(sea_level, 3) # SeaLevel là 0/1 nên không cần normalize thêm
+    print("✅ Static features saved")
 
-        # Nội suy và ghi các lớp thời tiết
-        for i, col in enumerate(weather_cols):
-            print(f"  -> Đang nội suy & ghi Band {i+4}: {col}")
-            vals = df_grouped[col].values
-            
-            # Nội suy linear
-            grid_vals = griddata(points, vals, grid_points, method='linear')
-            grid_vals = np.nan_to_num(grid_vals, nan=0.0)
-            
-            # Reshape và chuẩn hóa
-            final_band = grid_vals.reshape(grid_shape).astype(np.float32)
-            dst.write(normalize(final_band), i + 4)
+    # =====================
+    # 2. STATIC FLOOD PRIOR
+    # =====================
+    flood_static = flood_susceptibility(region)
 
-    print("\n" + "="*40)
-    print(f"🎉 HOÀN THÀNH!")
-    print(f"📂 File gộp 7-bands: {out_path}")
-    print("Thứ tự Band: 1.Elev, 2.Slope, 3.SeaLevel, 4.Rain, 5.Humid, 6.Soil0-7, 7.Soil7-28")
-    print("="*40)
+    geemap.ee_export_image(
+        flood_static,
+        f"{STATIC_DIR}/FloodSusceptibility.tif",
+        scale=SCALE,
+        region=region
+    )
 
-# ==========================================
-# THỰC THI
-# ==========================================
-if __name__ == "__main__":
-    try:
-        run_full_pipeline(PATH_DEM, PATH_WEATHER_CSV, OUTPUT_FINAL)
-    except Exception as e:
-        print(f"❌ LỖI: {e}")
+    print("✅ Static Flood Susceptibility saved")
+
+    # =====================
+    # 3. DAILY FEATURES + LABEL
+    # =====================
+    for d in range(n_days):
+        day = start_date.advance(d, "day")
+        day_str = day.format("YYYY_MM_dd").getInfo()
+
+        # ---------- RAIN ----------
+        rain_col = RAIN_IC.filterBounds(region).filterDate(day, day.advance(1, "day"))
+        if rain_col.size().getInfo() > 0:
+            rain = rain_col.sum().clip(region).unitScale(0, 200)
+            geemap.ee_export_image(
+                rain,
+                f"{DAILY_DIR}/Rain_{day_str}.tif",
+                scale=SCALE,
+                region=region
+            )
+
+        # ---------- SOIL MOISTURE ----------
+        soil_col = (
+            SOIL_IC
+            .filterBounds(region)
+            .filterDate(day, day.advance(1, "day"))
+            .select("sm_surface")
+        )
+
+        if soil_col.size().getInfo() > 0:
+            soil = soil_col.mean().clip(region)
+
+            soil = soil.setDefaultProjection(
+                crs="EPSG:4326",
+                scale=10000
+            )
+
+            soil = soil.reduceResolution(
+                reducer=ee.Reducer.mean(),
+                maxPixels=1024
+            ).reproject(
+                crs="EPSG:4326",
+                scale=SCALE
+            )
+
+            soil = soil.unitScale(0, 0.5)
+
+            geemap.ee_export_image(
+                soil,
+                f"{DAILY_DIR}/SoilMoisture_{day_str}.tif",
+                scale=SCALE,
+                region=region
+            )
+
+        # ---------- DAILY FLOOD LABEL ----------
+        flood = sentinel1_flood_mask(
+            region,
+            day,
+            day.advance(1, "day")
+        )
+
+        if flood is None:
+            print(f"⚠️ No Sentinel-1 data {day_str}")
+            continue
+
+        geemap.ee_export_image(
+            flood,
+            f"{LABEL_DIR}/Flood_{day_str}.tif",
+            scale=SCALE,
+            region=region
+        )
+
+        print(f"✅ Saved DAILY data + label {day_str}")
+
+print("\n✨ DONE: Full Flood Forecasting Dataset (Static + Daily + Labels)")
