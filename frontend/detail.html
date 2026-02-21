@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Detailed Analytics - Vietnam Flood Forecast</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1975d2",
+                        "background-light": "#f6f7f8",
+                        "background-dark": "#111921",
+                        "risk-low": "#4CAF50",
+                        "risk-med": "#FFC107",
+                        "risk-high": "#F44336",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body class="bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200 min-h-screen flex flex-col">
+    <!-- Header -->
+    <header
+        class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 h-16 flex items-center justify-between px-6 shadow-sm z-20 shrink-0 sticky top-0">
+        <div class="flex items-center gap-4">
+            <a href="/"
+                class="h-10 w-10 bg-primary/10 rounded-lg flex items-center justify-center hover:bg-primary/20 transition-colors">
+                <span class="material-icons text-primary text-2xl">arrow_back</span>
+            </a>
+            <div>
+                <h1 class="text-lg font-bold text-slate-900 dark:text-white leading-tight">Detailed Analytics</h1>
+                <p class="text-xs text-slate-500 font-medium flex items-center gap-1">
+                    <span class="material-icons text-[14px]">location_on</span>
+                    <span id="location-text">Loading...</span>
+                </p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="text-right">
+                <p class="text-xs text-slate-500">Selected Date</p>
+                <p id="date-text" class="text-sm font-bold text-slate-800 dark:text-white">--/--/----</p>
+            </div>
+            <div class="h-8 w-8 rounded-full bg-slate-200 overflow-hidden border border-slate-300">
+                <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuDgXK1uL4Mbfx-xqN2_FnNbklOPdA_4vb3nR04tyLjmOs6ZqEnmYiMogTVoYWuuSZ7Ap3PiR4sUnuAyLJ0cJu8j634E2GsLll-JOVUlY3XcicMcM1C5WWZSpLG7_GWP5D_AFNAyu9aJHe8Y1qVBujaBVOjDWwSxb6zdsy-Lra8yrpIsede5kwBucQigqQFnrYxcdckMBadEFGNe3_o7HPPh9CwH0CaJHcmnxoIMF3_NjDSSwJL3QxqzPA5-qstR_yvq1cO6H-NikYI"
+                    class="w-full h-full object-cover">
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
+        <!-- Overview Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <!-- Rainfall Card -->
+            <div
+                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <div class="flex items-start justify-between mb-2">
+                    <div>
+                        <p class="text-xs text-slate-500 font-medium uppercase">Rainfall (24h)</p>
+                        <h3 id="rainfall-val" class="text-2xl font-bold text-primary mt-1">-- mm</h3>
+                    </div>
+                    <span class="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 rounded-lg">
+                        <span class="material-icons">water_drop</span>
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">Moderate precipitation</p>
+            </div>
+
+            <!-- Soil Moisture Card -->
+            <div
+                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <div class="flex items-start justify-between mb-2">
+                    <div>
+                        <p class="text-xs text-slate-500 font-medium uppercase">Soil Moisture</p>
+                        <h3 id="soil-val" class="text-2xl font-bold text-red-600 mt-1">-- %</h3>
+                    </div>
+                    <span class="p-2 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-lg">
+                        <span class="material-icons">grass</span>
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">High saturation risk</p>
+            </div>
+
+            <!-- Flood Risk Card -->
+            <div
+                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <div class="flex items-start justify-between mb-2">
+                    <div>
+                        <p class="text-xs text-slate-500 font-medium uppercase">Flood Risk</p>
+                        <h3 id="risk-val" class="text-2xl font-bold text-amber-500 mt-1">--</h3>
+                    </div>
+                    <span class="p-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 rounded-lg">
+                        <span class="material-icons">warning</span>
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">Based on multi-factor analysis</p>
+            </div>
+
+            <!-- Elevation Card -->
+            <div
+                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <div class="flex items-start justify-between mb-2">
+                    <div>
+                        <p class="text-xs text-slate-500 font-medium uppercase">Elevation (DEM)</p>
+                        <h3 id="dem-val" class="text-2xl font-bold text-emerald-600 mt-1">-- m</h3>
+                    </div>
+                    <span class="p-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-lg">
+                        <span class="material-icons">terrain</span>
+                    </span>
+                </div>
+                <p class="text-xs text-slate-400">Above sea level</p>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Rainfall History Chart -->
+            <div
+                class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+                    <span class="material-icons text-primary">show_chart</span>
+                    Rainfall History & Forecast
+                </h3>
+                <div class="h-64">
+                    <canvas id="rainfallChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Environmental Factors Radar Chart -->
+            <div
+                class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+                <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+                    <span class="material-icons text-purple-500">radar</span>
+                    Environmental Factor Analysis
+                </h3>
+                <div class="h-64 flex items-center justify-center">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Row -->
+        <div class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+            <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+                <span class="material-icons text-blue-500">water</span>
+                Water Level & Soil Moisture Correlation
+            </h3>
+            <div class="h-64 w-full">
+                <canvas id="correlationChart"></canvas>
+            </div>
+        </div>
+
+    </main>
+
+    <script src="/js/data-loader.js"></script>
+    <script src="/js/data-panels.js"></script>
+</body>
+
+</html>
