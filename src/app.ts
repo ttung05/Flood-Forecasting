@@ -6,6 +6,7 @@ import path from 'path';
 import { pixelRouter } from './modules/pixel/pixel.controller';
 import { metadataRouter } from './modules/metadata/metadata.controller';
 import { gridRouter } from './modules/grid/grid.controller';
+import { forecastRouter } from './modules/forecast/forecast.controller';
 import { structuredLog } from './shared/middleware/tracing';
 
 const app = express();
@@ -39,6 +40,7 @@ app.get('/api/mask/:region/:date/label.png', async (req, res) => {
 app.use('/api', metadataRouter);
 app.use('/api', pixelRouter);
 app.use('/api', gridRouter);
+app.use('/api/forecast', forecastRouter);
 
 // Global Error Handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {

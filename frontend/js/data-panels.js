@@ -42,6 +42,10 @@ async function initTimeline() {
 
         updateTimelineCurrentDateUI();
 
+        if (timelineDates[currentDateIndex]) {
+            updateRainfallTrend(timelineDates[currentDateIndex], window.currentRegion || 'DaNang');
+        }
+
         slider.addEventListener('input', handleTimelineSlider);
         const playBtn = document.getElementById('play-btn');
         if (playBtn) playBtn.addEventListener('click', toggleTimelinePlay);
@@ -69,7 +73,9 @@ function handleTimelineSlider(e) {
     currentDateIndex = parseInt(e.target.value);
     updateTimelineCurrentDateUI();
     const region = window.currentRegion || 'DaNang';
-    if (typeof updateHeatmap === 'function') updateHeatmap(timelineDates[currentDateIndex], region);
+    const date = timelineDates[currentDateIndex];
+    if (typeof updateHeatmap === 'function') updateHeatmap(date, region);
+    updateRainfallTrend(date, region);
 }
 
 function toggleTimelinePlay() {
@@ -84,7 +90,10 @@ function toggleTimelinePlay() {
             const slider = document.getElementById('timeline-slider');
             if (slider) slider.value = currentDateIndex;
             updateTimelineCurrentDateUI();
-            if (typeof updateHeatmap === 'function') updateHeatmap(timelineDates[currentDateIndex], window.currentRegion || 'DaNang');
+            const date = timelineDates[currentDateIndex];
+            const region = window.currentRegion || 'DaNang';
+            if (typeof updateHeatmap === 'function') updateHeatmap(date, region);
+            updateRainfallTrend(date, region);
         }, 2000);
     } else {
         btn.textContent = '▶ Play';
@@ -112,11 +121,101 @@ function updateTimelineExternal(dateStr) {
         const slider = document.getElementById('timeline-slider');
         if (slider) slider.value = idx;
         updateTimelineCurrentDateUI();
+        updateRainfallTrend(dateStr, window.currentRegion || 'DaNang');
     }
 }
 
 if (typeof window !== 'undefined') {
     window.updateTimeline = updateTimelineExternal;
+}
+
+// --- TREND CHARTS (Dashboard Page) ---
+let trendChartInstance = null;
+
+async function updateRainfallTrend(dateStr, region) {
+    const canvas = document.getElementById('rainfallTrendChart');
+    if (!canvas) return; // Not on dashboard
+
+    try {
+        const url = `${window.API_BASE_URL || ''}/api/forecast/${region}/rainfall-trend?date=${dateStr}`;
+        const response = await fetch(url);
+        const envelope = await response.json();
+
+        if (!envelope.success) throw new Error(envelope.error?.message || 'API Error');
+
+        const trends = envelope.data;
+        const labels = trends.map(t => {
+            const parts = t.date.split('-');
+            return `${parts[2]}/${parts[1]}`;
+        });
+        const data = trends.map(t => t.total);
+
+        // Highlight the current date
+        const colors = trends.map(t => t.date === dateStr ? '#1976d2' : 'rgba(25, 118, 210, 0.4)');
+
+        if (typeof Chart === 'undefined') {
+            console.warn('⏱️ Chart.js not loaded yet. Retrying in 500ms...');
+            setTimeout(() => updateRainfallTrend(dateStr, region), 500);
+            return;
+        }
+
+        if (trendChartInstance && typeof trendChartInstance.update === 'function') {
+            trendChartInstance.data.labels = labels;
+            trendChartInstance.data.datasets[0].data = data;
+            trendChartInstance.data.datasets[0].backgroundColor = colors;
+
+            // Bắt buộc set lại min/max cứng nếu data bằng 0 để tránh scale bóp nát
+            const maxVal = Math.max(...data);
+            trendChartInstance.options.scales.y.max = maxVal > 0 ? undefined : 50;
+
+            trendChartInstance.update();
+        } else {
+            const ctx = canvas.getContext('2d');
+            const maxVal = Math.max(...data);
+            trendChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Total Rainfall (mm)',
+                        data,
+                        backgroundColor: colors,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    return `Total: ${Number(context.raw).toLocaleString()} mm`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: maxVal > 0 ? undefined : 50,
+                            ticks: {
+                                font: { size: 10 },
+                                stepSize: 10
+                            }
+                        },
+                        x: {
+                            ticks: { font: { size: 10 } },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+    } catch (e) {
+        console.error('Failed to load rainfall trend:', e);
+    }
 }
 
 // --- 2. DETAIL CHARTS (Detail Page Only) ---

@@ -290,82 +290,82 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
         };
 
         return `
-            <div class="flood-popup-card" style="font-family: Inter, sans-serif; min-width: 280px; max-width: 340px; color: #4b5563;">
+            <div class="flood-popup-card" style="font-family: Inter, sans-serif; min-width: 224px; max-width: 272px; color: #4b5563;">
                 <!-- Header -->
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 2px solid #f3f4f6; padding-bottom: 12px;">
-                    <strong style="font-size: 15px; color: #1e293b; font-weight: 700;">
-                        <span style="margin-right: 6px;">📍</span>Selected Area
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #f3f4f6; padding-bottom: 10px;">
+                    <strong style="font-size: 12px; color: #1e293b; font-weight: 700;">
+                        <span style="margin-right: 5px;">📍</span>Selected Area
                     </strong>
-                    <span style="background: ${riskColor}; color: white; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px ${riskColor}40;">
+                    <span style="background: ${riskColor}; color: white; font-size: 9px; font-weight: 700; padding: 3px 10px; border-radius: 5px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px ${riskColor}40;">
                         ${risk === 'HIGH' || risk === 'CRITICAL' ? '⚠ ' : ''}${risk}
                     </span>
                 </div>
 
                 <!-- Meta -->
-                <div style="font-size: 13px; margin-bottom: 12px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                <div style="font-size: 10px; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
                         <span style="color: #64748b;">Coordinates:</span>
-                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; color: #334155;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</span>
+                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 10px; color: #334155;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #f3f4f6;">
+                    <div style="display: flex; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid #f3f4f6;">
                         <span style="color: #64748b;">Region:</span>
                         <span style="font-weight: 600; color: #475569;">${regionName}</span>
                     </div>
                 </div>
 
                 <!-- Environmental Data -->
-                <div style="font-size: 13px; line-height: 2;">
-                    <strong style="font-size: 12px; color: #1e293b; display: block; margin-bottom: 8px;">
+                <div style="font-size: 10px; line-height: 1.8;">
+                    <strong style="font-size: 10px; color: #1e293b; display: block; margin-bottom: 6px;">
                         <span style="margin-right: 4px;">🌊</span>Environmental Data
                     </strong>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
                         <span style="color: #64748b;">🌧 Rainfall (24h):</span>
                         <span style="font-weight: 600; color: #1d4ed8;">${fmtVal(data.rainfall, ' mm')}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">⛰ DEM (Elevation):</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">DEM (Elevation):</span>
                         <span style="font-weight: 600; color: #059669;">${fmtVal(data.dem, ' m')}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">📐 Slope:</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Slope:</span>
                         <span style="font-weight: 600; color: #7e22ce;">${fmtVal(data.slope, '°')}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">💧 Soil Moisture:</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Soil Moisture:</span>
                         <span style="font-weight: 600; color: #dc2626;">${soilPct(data.soilMoisture)}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">🌊 Flow:</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Flow:</span>
                         <span style="font-weight: 600; color: #0891b2;">${fmtVal(data.flow, ' m³/s')}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">🌿 Land Cover:</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Land Cover:</span>
                         <span style="font-weight: 500; color: #475569;">${data.landCover != null ? data.landCover : 'N/A'}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                        <span style="color: #64748b;">🌊 Tide:</span>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Tide:</span>
                         <span style="font-weight: 500; color: #475569;">${fmtVal(data.tide, ' m')}</span>
                     </div>
 
                     <!-- Risk Bar -->
-                    <div style="margin: 12px 0; padding: 10px; background: ${riskColor}10; border-radius: 8px; border: 1px solid ${riskColor}30;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <span style="font-size: 11px; font-weight: 600; color: ${riskColor};">Flood Risk Level</span>
-                            <span style="font-size: 12px; font-weight: 700; color: ${riskColor};">${risk}</span>
+                    <div style="margin: 10px 0; padding: 8px; background: ${riskColor}10; border-radius: 6px; border: 1px solid ${riskColor}30;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <span style="font-size: 9px; font-weight: 600; color: ${riskColor};">Flood Risk Level</span>
+                            <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${risk}</span>
                         </div>
-                        <div style="height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
+                        <div style="height: 5px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
                             <div style="height: 100%; width: ${risk === 'LOW' ? '25' : risk === 'MEDIUM' ? '55' : risk === 'HIGH' ? '80' : risk === 'CRITICAL' ? '100' : '10'}%; background: ${riskColor}; border-radius: 3px; transition: width 0.5s ease;"></div>
                         </div>
                     </div>
 
                     <!-- Footer -->
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 16px; padding-top: 8px; border-top: 1px solid #f3f4f6;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 12px; padding-top: 6px; border-top: 1px solid #f3f4f6;">
                         <span style="color: #64748b;">📅 Date:</span>
                         <span style="font-weight: 500; color: #334155;">${date}</span>
                     </div>
                     
                     <button onclick="window.location.href='/detail.html?lat=${lat}&lng=${lng}&date=${date}&region=${region}'" 
-                        style="width: 100%; background: linear-gradient(135deg, #1976d2, #1565c0); color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 2px 8px rgba(25,118,210,0.3);"
+                        style="width: 100%; background: linear-gradient(135deg, #1976d2, #1565c0); color: white; border: none; padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s; box-shadow: 0 2px 8px rgba(25,118,210,0.3);"
                         onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(25,118,210,0.4)';" 
                         onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(25,118,210,0.3)';">
                         <span class="material-icons" style="font-size: 16px;">assessment</span>

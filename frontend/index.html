@@ -422,69 +422,12 @@
                         <div>
                             <h2 class="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2 mb-4">
                                 <span class="material-icons text-primary text-xl">water_drop</span>
-                                Rainfall Trend (9 Days)
+                                Rainfall Trend (Region Total)
                             </h2>
                             <div
-                                class="bg-slate-50/50 dark:bg-slate-800/50 p-4 rounded-lg border border-slate-100 dark:border-slate-700">
-                                <!-- Chart Container -->
-                                <div class="flex items-end justify-between gap-1 h-32 mb-2">
-                                    <!-- Day -4 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-slate-300 dark:bg-slate-600 rounded-t"
-                                            style="height: 40%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">-4d</span>
-                                    </div>
-                                    <!-- Day -3 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-slate-300 dark:bg-slate-600 rounded-t"
-                                            style="height: 55%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">-3d</span>
-                                    </div>
-                                    <!-- Day -2 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-slate-300 dark:bg-slate-600 rounded-t"
-                                            style="height: 30%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">-2d</span>
-                                    </div>
-                                    <!-- Day -1 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-slate-300 dark:bg-slate-600 rounded-t"
-                                            style="height: 45%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">-1d</span>
-                                    </div>
-                                    <!-- Today -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-primary rounded-t shadow-sm" style="height: 70%"></div>
-                                        <span class="text-[9px] text-primary font-bold">Now</span>
-                                    </div>
-                                    <!-- Day +1 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-blue-400 dark:bg-blue-500 rounded-t" style="height: 85%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">+1d</span>
-                                    </div>
-                                    <!-- Day +2 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-blue-400 dark:bg-blue-500 rounded-t" style="height: 95%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">+2d</span>
-                                    </div>
-                                    <!-- Day +3 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-blue-400 dark:bg-blue-500 rounded-t" style="height: 75%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">+3d</span>
-                                    </div>
-                                    <!-- Day +4 -->
-                                    <div class="flex-1 flex flex-col items-center gap-1">
-                                        <div class="w-full bg-blue-400 dark:bg-blue-500 rounded-t" style="height: 60%">
-                                        </div>
-                                        <span class="text-[9px] text-slate-400">+4d</span>
-                                    </div>
+                                class="bg-slate-50/50 dark:bg-slate-800/50 p-4 rounded-lg border border-slate-100 dark:border-slate-700 flex flex-col">
+                                <div class="relative w-full" style="height: 140px;">
+                                    <canvas id="rainfallTrendChart"></canvas>
                                 </div>
                                 <!-- Legend -->
                                 <div
@@ -495,11 +438,7 @@
                                     </div>
                                     <div class="flex items-center gap-1">
                                         <div class="w-2 h-2 bg-primary rounded"></div>
-                                        <span>Current</span>
-                                    </div>
-                                    <div class="flex items-center gap-1">
-                                        <div class="w-2 h-2 bg-blue-400 rounded"></div>
-                                        <span>Forecast</span>
+                                        <span>Current Date</span>
                                     </div>
                                 </div>
                             </div>
@@ -707,6 +646,9 @@
 
     <!-- Leaflet.heat plugin -->
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" defer></script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 
     <!-- Turf.js for spatial analysis -->
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js" defer></script>

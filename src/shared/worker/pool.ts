@@ -36,8 +36,8 @@ export class TifWorkerPool {
         const size = opts.maxWorkers ?? Math.max(1, os.cpus().length - 1);
         this.maxQueue = opts.maxQueueSize ?? 50;
         this.taskTimeoutMs = opts.taskTimeoutMs ?? 5000;
-
-        const workerPath = path.join(__dirname, 'tif-worker.js');
+        const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
+        const workerPath = path.join(__dirname, `tif-worker.${ext}`);
         for (let i = 0; i < size; i++) {
             const w = new Worker(workerPath, { workerData: {} });
             w.on('message', (result: DecodeResponse) => this.onResult(w, result));
@@ -111,7 +111,8 @@ export class TifWorkerPool {
         // Replace crashed worker
         const idx = this.workers.indexOf(worker);
         if (idx >= 0) {
-            const workerPath = path.join(__dirname, 'tif-worker.js');
+            const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
+            const workerPath = path.join(__dirname, `tif-worker.${ext}`);
             const newW = new Worker(workerPath, { workerData: {} });
             newW.on('message', (r: DecodeResponse) => this.onResult(newW, r));
             newW.on('error', (e: Error) => this.onError(newW, e));
