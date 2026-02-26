@@ -8,8 +8,6 @@
  *   - Interactive EDA table with heatmap cells
  */
 
-const DASH_API = window.API_BASE_URL || '';
-
 // ─── Chart Instances ───
 let chartTimeline = null;
 let chartSeasonality = null;
@@ -20,10 +18,11 @@ const state = {
     lng: 108.20,
     region: 'DaNang',
     baseDate: null,       // Focus date (string YYYY-MM-DD)
-    timelineData: [],     // Array of { date, rain, soil, risk, isForecast, ... }
+    timelineData: [],     // Array of { date, rain, soil, risk, ... }
     seasonalityData: {},  // { 2020: [12 months], 2021: [...], ... }
-    statisticsData: null, // Aggregated stats from region history
-    focusIndex: 5,        // Which row in timelineData is "today"
+    statisticsData: null, // Aggregated stats from pixel history
+    focusIndex: 0,        // Which row in timelineData is the focus (last = most recent)
+    availableDatesFlat: [], // Sorted array of 'YYYY-MM-DD' strings with data
 };
 
 // ─── Helpers ───
@@ -59,6 +58,17 @@ function lcLabel(val) {
     return LC_LABELS[num] || `Class ${num}`;
 }
 
+// ─── Statistical mode (most frequent value) ───
+function mode(arr) {
+    const freq = {};
+    arr.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
+    let maxCount = 0, maxVal = arr[0];
+    for (const [val, count] of Object.entries(freq)) {
+        if (count > maxCount) { maxCount = count; maxVal = val; }
+    }
+    return maxVal;
+}
+
 // ─── Risk styling ───
 function riskColor(risk) {
     const r = (risk || '').toUpperCase();
@@ -92,28 +102,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     const progress = $('load-progress');
     if (progress) progress.style.width = '20%';
 
-    // Parse URL params
+    // Parse URL params (map.js sends lat, lng, date, region)
     const params = new URLSearchParams(window.location.search);
     state.lat = parseFloat(params.get('lat')) || 16.05;
     state.lng = parseFloat(params.get('lng')) || 108.20;
     state.region = params.get('region') || 'DaNang';
+    const urlDate = params.get('date') || null; // Respect date from map navigation
 
     // Update header
     $('header-coords').textContent = `${state.lat.toFixed(3)}°N, ${state.lng.toFixed(3)}°E`;
     $('header-region').textContent = state.region;
 
-    // Get latest date from timeline
+    // Load available dates first — needed by all components
     try {
-        const tl = await dataLoader.loadTimeline();
-        state.baseDate = (tl && tl.dateRange && tl.dateRange.end) ? tl.dateRange.end : '2023-01-17';
+        const datesInfo = await dataLoader.loadAvailableDates(state.region);
+        if (datesInfo && datesInfo.availableDates) {
+            state.availableDatesFlat = buildFlatDateList(datesInfo.availableDates);
+            console.log(`📆 ${state.availableDatesFlat.length} available dates loaded`);
+        }
     } catch (e) {
-        console.warn('Timeline fallback:', e);
-        state.baseDate = '2023-01-17';
+        console.warn('Could not load available dates:', e);
+    }
+
+    // Get base date: prefer URL param, then last available date, then fallback
+    if (urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate)) {
+        state.baseDate = urlDate;
+    } else if (state.availableDatesFlat.length > 0) {
+        state.baseDate = state.availableDatesFlat[state.availableDatesFlat.length - 1];
+    } else {
+        try {
+            const tl = await dataLoader.loadTimeline();
+            state.baseDate = (tl && tl.dateRange && tl.dateRange.end) ? tl.dateRange.end : '2023-01-17';
+        } catch (e) {
+            console.warn('Timeline fallback:', e);
+            state.baseDate = '2023-01-17';
+        }
     }
 
     if (progress) progress.style.width = '40%';
 
-    // Fetch 10-day data (-5 .. +4 relative to baseDate)
+    // Fetch 10 most recent days with available data
     await fetchTimelineData();
     if (progress) progress.style.width = '60%';
 
@@ -155,55 +183,155 @@ document.addEventListener('DOMContentLoaded', async () => {
 //  DATA FETCHING
 // ══════════════════════════════════════════════════════
 
-async function fetchTimelineData() {
-    const promises = [];
-    for (let i = -5; i <= 4; i++) {
-        const d = offsetDate(state.baseDate, i);
-        const isForecast = i > 0;
-        const p = dataLoader.loadPixelData(state.lat, state.lng, d, state.region)
-            .then(res => {
-                if (res) {
-                    return {
-                        date: d, isForecast,
-                        rain: res.rainfall ?? 0,
-                        soil: res.soilMoisture ?? 0,
-                        risk: res.floodRisk || 'LOW',
-                        dem: res.dem ?? null,
-                        slope: res.slope ?? null,
-                        flow: res.flow ?? null,
-                        landCover: res.landCover ?? null,
-                        tide: res.tide ?? 0,
-                    };
-                }
-                return {
-                    date: d, isForecast,
-                    rain: isForecast ? +(Math.random() * 8).toFixed(1) : 0,
-                    soil: isForecast ? +(35 + Math.random() * 15).toFixed(1) : 0,
-                    risk: 'LOW', dem: null, slope: null, flow: null, landCover: null, tide: 0,
-                };
-            })
-            .catch(() => ({
-                date: d, isForecast,
-                rain: 0, soil: 0, risk: 'LOW',
-                dem: null, slope: null, flow: null, landCover: null, tide: 0,
-            }));
-        promises.push(p);
+/**
+ * Build a flat sorted array of 'YYYY-MM-DD' strings from the availableDates nested structure.
+ * availableDates format: { "2023": { "01": [1,2,...,31], "02": [...] }, ... }
+ */
+function buildFlatDateList(avail) {
+    const dates = [];
+    for (const year of Object.keys(avail).sort()) {
+        for (const month of Object.keys(avail[year]).sort()) {
+            for (const day of avail[year][month]) {
+                dates.push(`${year}-${month}-${String(day).padStart(2, '0')}`);
+            }
+        }
     }
-    state.timelineData = await Promise.all(promises);
-    // Today is at index 5 (offset 0)
-    state.focusIndex = 5;
+    return dates.sort();
+}
+
+/**
+ * Get the N most recent available dates up to and including `fromDate`.
+ * Returns dates in chronological order (oldest first).
+ */
+function getRecentAvailableDates(fromDate, count) {
+    const flat = state.availableDatesFlat;
+    if (!flat.length) {
+        // Fallback: generate consecutive dates ending at fromDate
+        const result = [];
+        for (let i = -(count - 1); i <= 0; i++) result.push(offsetDate(fromDate, i));
+        return result;
+    }
+    // Find the last date <= fromDate via binary search
+    let endIdx = flat.length - 1;
+    for (let i = flat.length - 1; i >= 0; i--) {
+        if (flat[i] <= fromDate) { endIdx = i; break; }
+    }
+    const startIdx = Math.max(0, endIdx - count + 1);
+    return flat.slice(startIdx, endIdx + 1);
+}
+
+async function fetchTimelineData() {
+    // Get 10 most recent dates with data, ending at baseDate
+    const recentDates = getRecentAvailableDates(state.baseDate, 10);
+    console.log(`📊 Timeline: ${recentDates.length} recent dates from ${recentDates[0]} to ${recentDates[recentDates.length - 1]}`);
+
+    const startDate = recentDates[0];
+    const endDate = recentDates[recentDates.length - 1];
+
+    // Strategy 1: Try bulk pixel history API (single request)
+    let bulkData = null;
+    try {
+        bulkData = await dataLoader.loadPixelHistory(
+            state.lat, state.lng, state.region, startDate, endDate
+        );
+    } catch (e) {
+        console.warn('Bulk pixel history failed, falling back to individual calls:', e);
+    }
+
+    if (bulkData && Array.isArray(bulkData) && bulkData.length > 0) {
+        // Check if bulk data has any dynamic data (rainfall/soilMoisture)
+        const hasDynamicData = bulkData.some(d => d.rainfall !== null || d.soilMoisture !== null);
+
+        if (!hasDynamicData) {
+            console.info('Bulk history returned only static data — falling back to individual pixel calls');
+            bulkData = null; // Force fallback
+        }
+    }
+
+    // Build a Set of target dates for filtering
+    const targetDateSet = new Set(recentDates);
+
+    if (bulkData && Array.isArray(bulkData) && bulkData.length > 0) {
+        // Map bulk results to timeline format — only keep dates that are in our target list
+        const bulkMap = {};
+        bulkData.forEach(d => { if (targetDateSet.has(d.date)) bulkMap[d.date] = d; });
+
+        state.timelineData = [];
+        for (const d of recentDates) {
+            const res = bulkMap[d];
+            state.timelineData.push({
+                date: d,
+                isForecast: false,
+                rain: Math.max(0, res?.rainfall ?? 0),
+                soil: Math.max(0, (res?.soilMoisture ?? 0) * 100),  // fraction → %
+                risk: res?.floodRisk || 'LOW',
+                dem: res?.dem ?? null,
+                slope: res?.slope ?? null,
+                flow: res?.flow ?? null,
+                landCover: res?.landCover ?? null,
+                tide: res?.tide ?? 0,
+            });
+        }
+
+        // Enrich the focus date (last = most recent) with full pixel data for floodRisk + tide
+        try {
+            const focusPixel = await dataLoader.loadPixelData(
+                state.lat, state.lng, state.baseDate, state.region
+            );
+            if (focusPixel) {
+                const focusEntry = state.timelineData[state.timelineData.length - 1];
+                if (focusEntry && focusEntry.date === state.baseDate) {
+                    focusEntry.risk = focusPixel.floodRisk || focusEntry.risk;
+                    focusEntry.tide = focusPixel.tide ?? focusEntry.tide;
+                }
+            }
+        } catch (e) {
+            console.warn('Could not enrich focus date with full pixel data:', e);
+        }
+    } else {
+        // Strategy 2: Fall back to individual pixel calls
+        const promises = recentDates.map(d =>
+            dataLoader.loadPixelData(state.lat, state.lng, d, state.region)
+                .then(res => ({
+                    date: d,
+                    isForecast: false,
+                    rain: Math.max(0, res?.rainfall ?? 0),
+                    soil: Math.max(0, (res?.soilMoisture ?? 0) * 100),  // fraction → %
+                    risk: res?.floodRisk || 'LOW',
+                    dem: res?.dem ?? null,
+                    slope: res?.slope ?? null,
+                    flow: res?.flow ?? null,
+                    landCover: res?.landCover ?? null,
+                    tide: res?.tide ?? 0,
+                }))
+                .catch(() => ({
+                    date: d, isForecast: false,
+                    rain: 0, soil: 0, risk: 'LOW',
+                    dem: null, slope: null, flow: null, landCover: null, tide: 0,
+                }))
+        );
+        state.timelineData = await Promise.all(promises);
+    }
+
+    // Focus = last item (most recent date)
+    state.focusIndex = state.timelineData.length - 1;
 }
 
 async function fetchRegionStats() {
     try {
-        const start = offsetDate(state.baseDate, -30);
-        const end = state.baseDate;
-        const url = `${DASH_API}/api/forecast/${state.region}/history?startDate=${start}&endDate=${end}`;
-        const res = await fetch(url);
-        const envelope = await res.json();
-        if (envelope.success && envelope.data && envelope.data.length > 0) {
-            state.statisticsData = envelope.data;
-            renderStatistics(envelope.data);
+        // Use available dates going backwards from baseDate
+        const statsDates = getRecentAvailableDates(state.baseDate, 31);
+        const start = statsDates[0];
+        const end = statsDates[statsDates.length - 1];
+        console.log(`📈 Regional Stats: ${statsDates.length} dates from ${start} to ${end}`);
+
+        const data = await dataLoader.loadPixelHistory(state.lat, state.lng, state.region, start, end);
+        if (data && Array.isArray(data) && data.length > 0) {
+            // Filter to only include dates that are in our available dates list
+            const dateSet = new Set(statsDates);
+            const filtered = data.filter(d => dateSet.has(d.date));
+            state.statisticsData = filtered;
+            renderStatistics(filtered);
         }
     } catch (e) {
         console.warn('Stats fetch error:', e);
@@ -234,13 +362,20 @@ function renderStaticKPIs() {
     $('kpi-flow').textContent = avg(flows);
     $('kpi-landcover').textContent = lcLabel(mode(lcs));
 
-    // Also try from stats if available
+    // Also try from stats if available (pixel history uses dem/slope/flow/landCover directly)
     if (state.statisticsData && state.statisticsData.length > 0) {
-        const first = state.statisticsData[0];
-        if (first.avgDem !== null && first.avgDem !== undefined) $('kpi-dem').textContent = Number(first.avgDem).toFixed(1);
-        if (first.avgSlope !== null && first.avgSlope !== undefined) $('kpi-slope').textContent = Number(first.avgSlope).toFixed(1);
-        if (first.avgFlow !== null && first.avgFlow !== undefined) $('kpi-flow').textContent = Number(first.avgFlow).toFixed(1);
-        if (first.avgLandCover !== null && first.avgLandCover !== undefined) $('kpi-landcover').textContent = lcLabel(first.avgLandCover);
+        const withDem = state.statisticsData.filter(d => d.dem !== null && d.dem !== undefined);
+        const withSlope = state.statisticsData.filter(d => d.slope !== null && d.slope !== undefined);
+        const withFlow = state.statisticsData.filter(d => d.flow !== null && d.flow !== undefined);
+        const withLC = state.statisticsData.filter(d => d.landCover !== null && d.landCover !== undefined);
+
+        if (withDem.length) $('kpi-dem').textContent = (withDem.reduce((a, d) => a + d.dem, 0) / withDem.length).toFixed(1);
+        if (withSlope.length) $('kpi-slope').textContent = (withSlope.reduce((a, d) => a + d.slope, 0) / withSlope.length).toFixed(1);
+        if (withFlow.length) $('kpi-flow').textContent = (withFlow.reduce((a, d) => a + d.flow, 0) / withFlow.length).toFixed(1);
+        if (withLC.length) {
+            const lcVals = withLC.map(d => d.landCover);
+            $('kpi-landcover').textContent = lcLabel(mode(lcVals));
+        }
     }
 }
 
@@ -255,13 +390,8 @@ function renderRiskKPIs(idx) {
     // Focus date
     $('kpi-focus-date').textContent = fmtDate(row.date);
     const badge = $('kpi-date-badge');
-    if (row.isForecast) {
-        badge.textContent = 'FORECAST';
-        badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-semibold bg-blue-50 text-blue-600 border border-blue-200';
-    } else {
-        badge.textContent = 'OBSERVED';
-        badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-semibold bg-slate-100 text-slate-600 border border-slate-200';
-    }
+    badge.textContent = 'OBSERVED';
+    badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-semibold bg-slate-100 text-slate-600 border border-slate-200';
 
     // Rainfall
     $('kpi-rainfall').textContent = row.rain.toFixed(1);
@@ -299,11 +429,11 @@ function renderTimelineChart() {
     if (!ctx) return;
 
     const labels = state.timelineData.map(d => shortDate(d.date));
-    const rainData = state.timelineData.map(d => d.rain);
-    const soilData = state.timelineData.map(d => d.soil);
+    const rainData = state.timelineData.map(d => Math.max(0, d.rain));
+    const soilData = state.timelineData.map(d => Math.max(0, d.soil));
 
-    // Find the boundary between observed and forecast
-    const todayIdx = state.timelineData.findIndex(d => !d.isForecast && state.timelineData[state.timelineData.indexOf(d) + 1]?.isForecast);
+    // Focus date marker (last item = most recent)
+    const focusIdx = state.focusIndex;
 
     const ctxCanvas = ctx.getContext('2d');
     const gradient = ctxCanvas.createLinearGradient(0, 0, 0, 280);
@@ -324,23 +454,14 @@ function renderTimelineChart() {
                     backgroundColor: gradient,
                     borderWidth: 2.5,
                     fill: true,
-                    tension: 0.4,
+                    tension: 0.3,
+                    cubicInterpolationMode: 'monotone',
                     pointBackgroundColor: state.timelineData.map((d, i) => i === state.focusIndex ? '#1d4ed8' : '#ffffff'),
                     pointBorderColor: '#1d4ed8',
                     pointBorderWidth: 2,
                     pointRadius: state.timelineData.map((d, i) => i === state.focusIndex ? 6 : 3),
                     pointHoverRadius: 7,
-                    yAxisID: 'y',
-                    segment: {
-                        borderDash: ctx => {
-                            const idx = ctx.p1DataIndex;
-                            return state.timelineData[idx]?.isForecast ? [6, 4] : undefined;
-                        },
-                        borderColor: ctx => {
-                            const idx = ctx.p1DataIndex;
-                            return state.timelineData[idx]?.isForecast ? 'rgba(29, 78, 216, 0.5)' : '#1d4ed8';
-                        }
-                    }
+                    yAxisID: 'y'
                 },
                 {
                     label: 'Soil Moisture (%)',
@@ -348,20 +469,11 @@ function renderTimelineChart() {
                     borderColor: '#d97706',
                     borderWidth: 2,
                     fill: false,
-                    tension: 0.4,
+                    tension: 0.3,
+                    cubicInterpolationMode: 'monotone',
                     pointRadius: 0,
                     pointHoverRadius: 5,
-                    yAxisID: 'y1',
-                    segment: {
-                        borderDash: ctx => {
-                            const idx = ctx.p1DataIndex;
-                            return state.timelineData[idx]?.isForecast ? [6, 4] : undefined;
-                        },
-                        borderColor: ctx => {
-                            const idx = ctx.p1DataIndex;
-                            return state.timelineData[idx]?.isForecast ? 'rgba(217, 119, 6, 0.5)' : '#d97706';
-                        }
-                    }
+                    yAxisID: 'y1'
                 }
             ]
         },
@@ -382,22 +494,22 @@ function renderTimelineChart() {
                     callbacks: {
                         title: items => {
                             const row = state.timelineData[items[0].dataIndex];
-                            return `${row.date} ${row.isForecast ? '(Forecast)' : '(Observed)'}`;
+                            return `${row.date} (Observed)`;
                         }
                     }
                 },
-                annotation: todayIdx >= 0 ? {
+                annotation: {
                     annotations: {
-                        todayLine: {
+                        focusLine: {
                             type: 'line',
-                            xMin: todayIdx + 0.5,
-                            xMax: todayIdx + 0.5,
+                            xMin: focusIdx,
+                            xMax: focusIdx,
                             borderColor: 'rgba(29, 78, 216, 0.3)',
                             borderWidth: 2,
                             borderDash: [4, 4],
                             label: {
                                 display: true,
-                                content: 'NOW',
+                                content: 'FOCUS',
                                 position: 'start',
                                 backgroundColor: 'rgba(29, 78, 216, 0.85)',
                                 font: { size: 9, family: 'JetBrains Mono', weight: '700' },
@@ -406,7 +518,7 @@ function renderTimelineChart() {
                             }
                         }
                     }
-                } : {}
+                }
             },
             scales: {
                 x: {
@@ -468,12 +580,11 @@ function renderEDATable() {
         <tr class="cursor-pointer transition-colors ${activeClass}" onclick="onTableRowClick(${idx})" data-row-idx="${idx}">
             <td class="px-6 py-3.5 font-mono text-xs ${isActive ? 'text-gov-500 font-bold' : 'text-slate-700'}">
                 ${row.date}
-                ${row.isForecast ? '<span class="ml-1 text-[9px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded border border-blue-100">F</span>' : ''}
             </td>
             <td class="px-4 py-3.5 text-right data-mono text-xs ${rainHmClass(row.rain)}">${row.rain.toFixed(1)}</td>
             <td class="px-4 py-3.5 text-right data-mono text-xs ${soilHmClass(row.soil)}">${row.soil.toFixed(1)}</td>
             <td class="px-4 py-3.5 text-center">
-                <span class="text-[10px] font-semibold ${row.isForecast ? 'text-blue-500' : 'text-slate-400'}">${row.isForecast ? 'FORECAST' : 'OBSERVED'}</span>
+                <span class="text-[10px] font-semibold text-slate-400">OBSERVED</span>
             </td>
             <td class="px-4 py-3.5 text-center">
                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${rc.bg} ${rc.text}">${row.risk}</span>
@@ -512,14 +623,16 @@ function highlightTableRow(idx) {
 function renderStatistics(histData) {
     if (!histData || histData.length === 0) return;
 
-    const rains = histData.map(d => d.totalRainfall || 0);
-    const soils = histData.map(d => d.avgSoilMoisture || 0);
+    // Support both pixel history fields (rainfall, soilMoisture) and region history fields (totalRainfall, avgSoilMoisture)
+    const rains = histData.map(d => d.rainfall ?? d.totalRainfall ?? 0).filter(v => v !== null);
+    const soils = histData.map(d => d.soilMoisture ?? d.avgSoilMoisture ?? 0).filter(v => v !== null);
 
-    const avgRain = rains.reduce((a, b) => a + b, 0) / rains.length;
-    const maxRain = Math.max(...rains);
+    const daysWithRain = rains.filter(r => r > 0);
+    const avgRain = daysWithRain.length ? daysWithRain.reduce((a, b) => a + b, 0) / daysWithRain.length : 0;
+    const maxRain = rains.length ? Math.max(...rains) : 0;
     const totalRain = rains.reduce((a, b) => a + b, 0);
-    const avgSoil = soils.reduce((a, b) => a + b, 0) / soils.length;
-    const maxSoil = Math.max(...soils);
+    const avgSoil = soils.length ? soils.reduce((a, b) => a + b, 0) / soils.length : 0;
+    const maxSoil = soils.length ? Math.max(...soils) : 0;
     const heavyDays = rains.filter(r => r > 20).length;
 
     const firstDate = histData[0]?.date || '--';
@@ -528,8 +641,8 @@ function renderStatistics(histData) {
     $('stat-avg-rain').textContent = avgRain.toFixed(1) + ' mm';
     $('stat-max-rain').textContent = maxRain.toFixed(1) + ' mm';
     $('stat-total-rain').textContent = totalRain.toFixed(1) + ' mm';
-    $('stat-avg-soil').textContent = avgSoil.toFixed(1) + '%';
-    $('stat-max-soil').textContent = maxSoil.toFixed(1) + '%';
+    $('stat-avg-soil').textContent = (avgSoil * 100).toFixed(1) + '%';
+    $('stat-max-soil').textContent = (maxSoil * 100).toFixed(1) + '%';
     $('stat-heavy-days').textContent = heavyDays + ' days';
     $('stat-period').textContent = `${firstDate} → ${lastDate}`;
     $('stats-region-label').textContent = `${state.region} — ${histData.length} days analyzed`;
@@ -541,30 +654,43 @@ function renderStatistics(histData) {
 
 async function initSeasonality() {
     const years = [2020, 2021, 2022, 2023, 2024, 2025];
-    const months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     // Initialize datasets
     years.forEach(y => { state.seasonalityData[y] = new Array(12).fill(null); });
 
-    // Build fetch list
-    const fetchMap = [];
-    const fetchPromises = [];
+    // Fetch per-year pixel history (6 API calls) then aggregate daily→monthly totals
+    const yearPromises = years.map(y =>
+        dataLoader.loadPixelHistory(
+            state.lat, state.lng, state.region,
+            `${y}-01-01`, `${y}-12-31`
+        ).catch(() => null)
+    );
 
-    for (const y of years) {
-        for (let mIdx = 0; mIdx < 12; mIdx++) {
-            const d = `${y}-${months[mIdx]}-15`;
-            fetchMap.push({ year: y, monthIndex: mIdx });
-            fetchPromises.push(
-                dataLoader.loadPixelData(state.lat, state.lng, d, state.region).catch(() => null)
-            );
-        }
-    }
+    const yearResults = await Promise.all(yearPromises);
 
-    const results = await Promise.all(fetchPromises);
-    results.forEach((res, i) => {
-        const { year, monthIndex } = fetchMap[i];
-        state.seasonalityData[year][monthIndex] = res?.rainfall ?? null;
+    yearResults.forEach((dailyData, yIdx) => {
+        const year = years[yIdx];
+        if (!dailyData || !Array.isArray(dailyData)) return;
+
+        // Group daily rainfall by month and sum
+        const monthlyTotals = new Array(12).fill(null);
+        const monthlyCounts = new Array(12).fill(0);
+
+        dailyData.forEach(day => {
+            if (day.rainfall === null || day.rainfall === undefined) return;
+            const monthIdx = parseInt(day.date.substring(5, 7), 10) - 1; // 0-indexed
+            if (monthlyTotals[monthIdx] === null) monthlyTotals[monthIdx] = 0;
+            monthlyTotals[monthIdx] += day.rainfall;
+            monthlyCounts[monthIdx]++;
+        });
+
+        state.seasonalityData[year] = monthlyTotals;
+
+        // Log coverage for debugging
+        const monthsWithData = monthlyCounts.filter(c => c > 0).length;
+        console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months with data, ` +
+            `total days=${dailyData.length}, days with rain=${monthlyCounts.reduce((a,b) => a+b, 0)}`);
     });
 
     // Render chart
@@ -634,7 +760,7 @@ function renderSeasonalityChart(monthLabels, years) {
                 },
                 y: {
                     grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                    title: { display: true, text: 'Rainfall (mm)', font: { size: 10, family: 'Inter' }, color: '#64748b' },
+                    title: { display: true, text: 'Monthly Total Rainfall (mm)', font: { size: 10, family: 'Inter' }, color: '#64748b' },
                     min: 0,
                     ticks: { font: { family: 'JetBrains Mono', size: 10 }, color: '#94a3b8' }
                 }

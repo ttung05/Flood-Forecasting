@@ -90,10 +90,10 @@ export async function getRegionHistory(region: Region, startDateStr: string, end
             gridService.getGrid({ region: region as 'DaNang', date: firstDate as any, layer: 'landCover' })
         ]);
 
-        if (demRes.ok && demRes.value.data) avgDem = calculateGridStats(demRes.value.data, demRes.value.nodata, demRes.value.scale, 'avg');
-        if (slopeRes.ok && slopeRes.value.data) avgSlope = calculateGridStats(slopeRes.value.data, slopeRes.value.nodata, slopeRes.value.scale, 'avg');
-        if (flowRes.ok && flowRes.value.data) avgFlow = calculateGridStats(flowRes.value.data, flowRes.value.nodata, flowRes.value.scale, 'sum');
-        if (lcRes.ok && lcRes.value.data) avgLandCover = calculateGridStats(lcRes.value.data, lcRes.value.nodata, lcRes.value.scale, 'avg');
+        if (demRes.ok && demRes.value && demRes.value.data) avgDem = calculateGridStats(demRes.value.data, demRes.value.nodata, demRes.value.scale, 'avg');
+        if (slopeRes.ok && slopeRes.value && slopeRes.value.data) avgSlope = calculateGridStats(slopeRes.value.data, slopeRes.value.nodata, slopeRes.value.scale, 'avg');
+        if (flowRes.ok && flowRes.value && flowRes.value.data) avgFlow = calculateGridStats(flowRes.value.data, flowRes.value.nodata, flowRes.value.scale, 'sum');
+        if (lcRes.ok && lcRes.value && lcRes.value.data) avgLandCover = calculateGridStats(lcRes.value.data, lcRes.value.nodata, lcRes.value.scale, 'avg');
     }
 
     // 3. Fetch dynamic (daily) data
@@ -106,11 +106,11 @@ export async function getRegionHistory(region: Region, startDateStr: string, end
             gridService.getGrid({ region: region as 'DaNang', date: dateStr as any, layer: 'soilMoisture' })
         ]);
 
-        if (rainRes.ok && rainRes.value.data) {
+        if (rainRes.ok && rainRes.value && rainRes.value.data) {
             totalRainfall = calculateGridStats(rainRes.value.data, rainRes.value.nodata, rainRes.value.scale, 'sum');
         }
 
-        if (smRes.ok && smRes.value.data) {
+        if (smRes.ok && smRes.value && smRes.value.data) {
             avgSoilMoisture = calculateGridStats(smRes.value.data, smRes.value.nodata, smRes.value.scale, 'avg');
         }
 

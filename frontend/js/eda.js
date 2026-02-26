@@ -1,208 +1,202 @@
 /**
- * eda.js - Exploratory Data Analysis Dashboard Logic
- * Fetches multi-day pixel history and renders Chart.js charts.
+ * pixel-eda.js - Plotly Interactive Heatmap Stack for Multi-dimensional Pixel Analytics
  */
 
-// Global Chart Instances
-let rainChartInstance = null;
-let soilChartInstance = null;
+// Clock Topbar
+function updateClock() {
+    const now = new Date();
+    document.getElementById('nav-clock').textContent = now.toLocaleTimeString('en-GB') + ' UTC+7';
+}
+setInterval(updateClock, 1000);
+updateClock();
 
-const API_BASE_URL = window.API_BASE_URL || '';
+// --- DATA MOCKING LAYER ---
+const bounds = {
+    latMin: 15.95, latMax: 16.25,
+    lonMin: 107.9, lonMax: 108.4
+};
 
-// DOM Elements
-const form = document.getElementById('filter-form');
-const inpStart = document.getElementById('start-date');
-const inpEnd = document.getElementById('end-date');
-const loadingIndicator = document.getElementById('loadingIndicator');
-const dataContent = document.getElementById('dataContent');
-const errorContainer = document.getElementById('errorContainer');
-const errorMessage = document.getElementById('errorMessage');
+const gridSize = 80;
 
-const uiRegion = document.getElementById('ui-region');
+const xLon = [];
+const yLat = [];
+for (let i = 0; i < gridSize; i++) {
+    xLon.push(bounds.lonMin + i * (bounds.lonMax - bounds.lonMin) / gridSize);
+    yLat.push(bounds.latMin + i * (bounds.latMax - bounds.latMin) / gridSize);
+}
 
-const valDem = document.getElementById('val-dem');
-const valSlope = document.getElementById('val-slope');
-const valFlow = document.getElementById('val-flow');
-const valLc = document.getElementById('val-lc');
+// Generate Z data matrices
+const zDem = [];
+const zFlood = [];
+const zFlow = [];
+const zLc = [];
+const zRain = [];
+const zSoil = [];
 
-function getUrlParams() {
-    const params = new URLSearchParams(window.location.search);
-    return {
-        region: params.get('region') || 'DaNang'
+for (let r = 0; r < gridSize; r++) { // y axis loop
+    const rowDem = [];
+    const rowFlood = [];
+    const rowFlow = [];
+    const rowLc = [];
+    const rowRain = [];
+    const rowSoil = [];
+
+    for (let c = 0; c < gridSize; c++) { // x axis loop
+        const lat = yLat[r];
+        const lon = xLon[c];
+
+        // 1. DEM (Elevation)
+        const noise = (Math.random() - 0.5) * 0.15;
+        let vDem = (Math.sin(lat * 40) * Math.cos(lon * 40)) * 0.5 + 0.5 + noise;
+        if (vDem < 0.25) vDem = 0; // sea level limit
+        let finalDem = vDem * 20;
+        rowDem.push(finalDem);
+
+        // 2. Flood (Dependent on DEM=0)
+        let isFlood = (finalDem === 0 && Math.random() > 0.45) ? 1 : 0;
+        rowFlood.push(isFlood);
+
+        // 3. Flow Accumulation (Inverse to DEM)
+        let finalFlow = Math.pow((1 - (finalDem / 20)), 3) * 1000 + (Math.random() * 10);
+        rowFlow.push(finalFlow);
+
+        // 4. LULC (Categorical 1-5, depends roughly on altitude)
+        let finalLc = 1;
+        if (finalDem === 0) finalLc = 1; // Water body
+        else if (finalDem < 5) finalLc = 2; // Bare land / urban
+        else if (finalDem < 10) finalLc = 3; // Shrubs
+        else if (finalDem < 15) finalLc = 4; // Agriculture
+        else finalLc = 5; // Forest
+        rowLc.push(finalLc);
+
+        // 5. Rainfall (Spacial function, random showers)
+        let finalRain = Math.max(0, (Math.sin(lat * 15) + Math.cos(lon * 10)) * 50 + 40 + noise * 50);
+        rowRain.push(finalRain);
+
+        // 6. Soil Moisture (Depends on Rain and Flood)
+        let finalSoil = Math.min(100, (finalRain * 0.4) + (isFlood * 80) + (Math.random() * 5));
+        rowSoil.push(finalSoil);
+    }
+    zDem.push(rowDem);
+    zFlood.push(rowFlood);
+    zFlow.push(rowFlow);
+    zLc.push(rowLc);
+    zRain.push(rowRain);
+    zSoil.push(rowSoil);
+}
+
+// --- PLOTLY SHARED CONFIGURATION ---
+const defaultLayout = {
+    margin: { t: 40, r: 20, b: 50, l: 60 },
+    xaxis: { title: 'Longitude (Kinh độ)', fixedrange: false, color: '#64748b' },
+    yaxis: { title: 'Latitude (Vĩ độ)', fixedrange: false, scaleanchor: 'x', scaleratio: 1, color: '#64748b' },
+    plot_bgcolor: '#f8fafc',
+    paper_bgcolor: 'transparent'
+};
+
+const configShared = {
+    responsive: true,
+    displayModeBar: true,
+    displaylogo: false,
+    modeBarButtonsToRemove: ['lasso2d', 'select2d']
+};
+
+// HELPER FUNCTION: Setup Plot and Click Logic
+function applyPlot(domId, zData, colorscale, title, valSuffix, valPrefixHtml, boxId, coordId, valId, isCategorical = false, catMap = {}) {
+    const trace = {
+        x: xLon, y: yLat, z: zData,
+        type: 'heatmap',
+        colorscale: colorscale,
+        colorbar: {
+            title: title,
+            thickness: 15, len: 0.9,
+            tickfont: { color: '#64748b' },
+            titlefont: { color: '#1e293b', size: 11 }
+        },
+        hovertemplate: `Kinh Độ: %{x:.4f}<br>Vĩ Độ: %{y:.4f}<br><b>${title}: %{z:.2f}</b><extra></extra>`
     };
-}
 
-async function initDates(region) {
-    try {
-        const url = `${API_BASE_URL}/api/dates/${region}`;
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (data.success && data.data && data.data.dateRange) {
-            const endDateStr = data.data.dateRange.end;
-            const today = new Date(endDateStr);
-            const past = new Date(today);
-            past.setDate(today.getDate() - 30);
-
-            inpEnd.value = endDateStr;
-            inpStart.value = past.toISOString().split('T')[0];
-            return;
-        }
-    } catch (e) {
-        console.warn('Failed to fetch date range, using fallback', e);
+    if (isCategorical) {
+        trace.colorbar.tickmode = 'array';
+        trace.colorbar.tickvals = Object.keys(catMap).map(Number);
+        trace.colorbar.ticktext = Object.values(catMap).map(x => x.label);
     }
 
-    // Default Fallback
-    const today = new Date();
-    const past = new Date(today);
-    past.setDate(today.getDate() - 30);
+    Plotly.newPlot(domId, [trace], { ...defaultLayout, title: false }, configShared);
 
-    inpEnd.value = today.toISOString().split('T')[0];
-    inpStart.value = past.toISOString().split('T')[0];
-}
+    document.getElementById(domId).on('plotly_click', function (data) {
+        if (data.points.length > 0) {
+            const pt = data.points[0];
+            // Format Coords
+            const cDom = document.getElementById(coordId);
+            cDom.innerHTML = `<span class="text-slate-400 font-normal">y:</span> ${pt.y.toFixed(4)}, <span class="text-slate-400 font-normal">x:</span> ${pt.x.toFixed(4)}`;
+            // Remove initial placeholder color, add active color
+            cDom.className = cDom.className.replace(/text-[a-z]+-600/, 'text-slate-800');
 
-function showError(msg) {
-    errorContainer.classList.remove('hidden');
-    errorMessage.textContent = msg;
-    dataContent.classList.add('hidden');
-    loadingIndicator.classList.add('hidden');
-}
-
-function hideError() {
-    errorContainer.classList.add('hidden');
-}
-
-async function fetchAndRenderData(region, startDate, endDate) {
-    hideError();
-    dataContent.classList.add('hidden');
-    loadingIndicator.classList.remove('hidden');
-
-    try {
-        const url = `${API_BASE_URL}/api/forecast/${region}/history?startDate=${startDate}&endDate=${endDate}`;
-        const response = await fetch(url);
-        const envelope = await response.json();
-
-        if (!envelope.success) throw new Error(envelope.error?.message || 'Failed to fetch history API');
-
-        const historyData = envelope.data;
-
-        if (!historyData || historyData.length === 0) {
-            throw new Error(`No data available for the selected dates ${startDate} to ${endDate}.`);
-        }
-
-        renderStaticValues(historyData[0]);
-        renderCharts(historyData);
-
-        loadingIndicator.classList.add('hidden');
-        dataContent.classList.remove('hidden');
-        dataContent.classList.add('flex'); // Because it's a flex-col gap-8
-
-    } catch (e) {
-        console.error(e);
-        showError(e.message);
-    }
-}
-
-function renderStaticValues(firstDay) {
-    valDem.textContent = firstDay.avgDem !== null ? firstDay.avgDem : 'N/A';
-    valSlope.textContent = firstDay.avgSlope !== null ? firstDay.avgSlope : 'N/A';
-    valFlow.textContent = firstDay.avgFlow !== null ? firstDay.avgFlow : 'N/A';
-    valLc.textContent = firstDay.avgLandCover !== null ? firstDay.avgLandCover : 'N/A';
-}
-
-function renderCharts(historyData) {
-    const labels = historyData.map(d => {
-        const parts = d.date.split('-');
-        return `${parts[2]}/${parts[1]}`;
-    });
-
-    const rainData = historyData.map(d => d.totalRainfall || 0);
-    const soilData = historyData.map(d => d.avgSoilMoisture || 0);
-
-    // RAINFALL CHART
-    const ctxRain = document.getElementById('rainChart').getContext('2d');
-    if (rainChartInstance) rainChartInstance.destroy();
-    rainChartInstance = new Chart(ctxRain, {
-        type: 'line',
-        data: {
-            labels,
-            datasets: [{
-                label: 'Rainfall (mm)',
-                data: rainData,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                borderWidth: 2,
-                pointBackgroundColor: '#2563eb',
-                fill: true,
-                tension: 0.3
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: (ctx) => `Rainfall: ${ctx.raw} mm` } }
-            },
-            scales: {
-                y: { beginAtZero: true },
-                x: { grid: { display: false } }
+            // Format Value
+            const vDom = document.getElementById(valId);
+            if (isCategorical) {
+                const mapObj = catMap[Math.round(pt.z)] || { label: 'Unknown', bg: 'bg-slate-200', text: 'text-slate-600' };
+                vDom.innerHTML = `<div class="${mapObj.bg} ${mapObj.text} px-3 py-1 rounded shadow-sm border border-black/10 text-[13px] font-medium inline-block">${mapObj.label}</div>`;
+            } else {
+                vDom.innerHTML = pt.z.toFixed(2);
             }
-        }
-    });
 
-    // SOIL MOISTURE CHART
-    const ctxSoil = document.getElementById('soilChart').getContext('2d');
-    if (soilChartInstance) soilChartInstance.destroy();
-    soilChartInstance = new Chart(ctxSoil, {
-        type: 'line',
-        data: {
-            labels,
-            datasets: [{
-                label: 'Soil Moisture',
-                data: soilData,
-                borderColor: '#b45309',
-                backgroundColor: 'rgba(180, 83, 9, 0.1)',
-                borderWidth: 2,
-                pointBackgroundColor: '#92400e',
-                fill: true,
-                tension: 0.3
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: (ctx) => `Soil: ${ctx.raw}` } }
-            },
-            scales: {
-                y: { beginAtZero: true },
-                x: { grid: { display: false } }
-            }
+            // UX UI Flash (Flash the parent node background slightly)
+            const pNode = document.getElementById(valId).parentElement;
+            pNode.style.transition = 'none';
+            pNode.style.backgroundColor = '#f1f5f9';
+            setTimeout(() => {
+                pNode.style.transition = 'background-color 0.8s ease';
+                pNode.style.backgroundColor = 'white';
+            }, 50);
         }
     });
 }
 
-// Initialization
-document.addEventListener('DOMContentLoaded', async () => {
-    const { region } = getUrlParams();
+// ============================================
+// INITIATE PLOTS
+// ============================================
 
-    if (!region) {
-        showError('Invalid Region parameter in URL.');
-        return;
-    }
+// 1. DEM Plot
+applyPlot('plot-dem', zDem, 'Earth', 'Elevation (m)', 'm', '',
+    'plot-dem', 'coord-dem', 'val-dem');
 
-    uiRegion.textContent = region;
+// 2. FLOOD Plot
+const floodMap = {
+    0: { label: 'Bình thường (0)', bg: 'bg-[#f8fafc]', text: 'text-slate-600' },
+    1: { label: 'Ngập lụt Flood (1)', bg: 'bg-blue-600', text: 'text-white font-bold animate-pulse' }
+};
+applyPlot('plot-flood', zFlood, [[0, '#f8fafc'], [1, '#0000ff']], 'Water Extent', '', '',
+    'plot-flood', 'coord-flood', 'val-flood', true, floodMap);
 
-    await initDates(region);
+// 3. FLOW Plot
+applyPlot('plot-flow', zFlow, 'Blues', 'Flow Acc', '', '',
+    'plot-flow', 'coord-flow', 'val-flow');
 
-    // Initial Fetch
-    fetchAndRenderData(region, inpStart.value, inpEnd.value);
+// 4. LULC Plot
+const lcMap = {
+    1: { label: 'Water Body (Nước)', bg: 'bg-blue-500', text: 'text-white' },
+    2: { label: 'Bare Land / Urban', bg: 'bg-slate-500', text: 'text-white' },
+    3: { label: 'Shrubland', bg: 'bg-lime-500', text: 'text-white' },
+    4: { label: 'Agriculture', bg: 'bg-yellow-500', text: 'text-slate-900' },
+    5: { label: 'Forest', bg: 'bg-green-700', text: 'text-white' }
+};
+// Array of colors mimicking the discrete lcMap categories
+const lcColors = [
+    [0.0, '#3b82f6'], [0.2, '#3b82f6'],
+    [0.2, '#64748b'], [0.4, '#64748b'],
+    [0.4, '#a3e635'], [0.6, '#a3e635'],
+    [0.6, '#eab308'], [0.8, '#eab308'],
+    [0.8, '#15803d'], [1.0, '#15803d']
+];
+applyPlot('plot-lc', zLc, lcColors, 'Class', '', '',
+    'plot-lc', 'coord-lc', 'val-lc', true, lcMap);
 
-    // Form submission
-    form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        fetchAndRenderData(region, inpStart.value, inpEnd.value);
-    });
-});
+// 5. RAIN Plot
+applyPlot('plot-rain', zRain, 'YlGnBu', 'Rainfall (mm)', 'mm', '',
+    'plot-rain', 'coord-rain', 'val-rain');
+
+// 6. SOIL MOISTURE Plot
+applyPlot('plot-soil', zSoil, 'YlOrRd', 'Moisture (Vol)', '%', '',
+    'plot-soil', 'coord-soil', 'val-soil');

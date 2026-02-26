@@ -9,7 +9,7 @@
 class DataLoader {
     constructor() {
         this.cache = new Map();
-        this.maxCacheSize = 20;
+        this.maxCacheSize = 100; // Increased from 20 to handle seasonality (72 months) + timeline + other data
         this.currentRegion = 'DaNang';
         this.availableDates = null;  // { availableDates, totalDays, dateRange, ... }
     }
@@ -167,6 +167,50 @@ class DataLoader {
             return data;
         } catch (error) {
             console.warn(`⚠️ Could not check layers for ${region}/${date}: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Load pixel history for a coordinate over a date range (bulk).
+     * Uses /api/pixel/history endpoint instead of individual pixel calls.
+     * @returns Array of { date, rainfall, soilMoisture, dem, slope, flow, landCover }
+     */
+    async loadPixelHistory(lat, lng, region, startDate, endDate) {
+        const cacheKey = `pixhist_${region}_${lat}_${lng}_${startDate}_${endDate}`;
+        const cached = this._cacheGet(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const url = `${window.API_BASE_URL}/api/pixel/history?lat=${lat}&lng=${lng}&region=${region}&startDate=${startDate}&endDate=${endDate}`;
+            const data = await this._fetch(url);
+            this._cacheSet(cacheKey, data);
+            console.log(`✅ Pixel history [${lat}, ${lng}] ${startDate}→${endDate}: ${data.length} days`);
+            return data;
+        } catch (error) {
+            console.warn(`⚠️ No pixel history at [${lat},${lng}]: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Load region-level aggregated history (forecast history).
+     * Uses /api/forecast/:region/history endpoint.
+     * @returns Array of { date, totalRainfall, avgSoilMoisture, avgDem, avgSlope, avgFlow, avgLandCover }
+     */
+    async loadRegionHistory(region, startDate, endDate) {
+        const cacheKey = `reghist_${region}_${startDate}_${endDate}`;
+        const cached = this._cacheGet(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const url = `${window.API_BASE_URL}/api/forecast/${region}/history?startDate=${startDate}&endDate=${endDate}`;
+            const data = await this._fetch(url);
+            this._cacheSet(cacheKey, data);
+            console.log(`✅ Region history ${region} ${startDate}→${endDate}: ${data.length} days`);
+            return data;
+        } catch (error) {
+            console.warn(`⚠️ No region history for ${region}: ${error.message}`);
             return null;
         }
     }
