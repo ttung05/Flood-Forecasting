@@ -7,7 +7,7 @@ let boundingBoxes = [];
 let rainHeatLayer = null;   // L.heatLayer cho rainfall (tuỳ chọn)
 let isUpdating = false;     // Lock để ngăn race condition
 
-let currentDate = '2023-01-08'; // Date in seed data (step=7 days from 2020-01-01)
+let currentDate = null; // Will be auto-set from API (latest available date)
 let currentRegion = 'DaNang';
 let vietnamBoundary = null; // Polygon biên giới VN để mask vùng ngập
 
@@ -791,10 +791,7 @@ function initMap() {
 
     // --- Add Other Controls & Events ---
 
-    // Zoom Control (Bottom Right)
-    L.control.zoom({
-        position: 'bottomright'
-    }).addTo(map);
+    // --- Add Other Controls & Events ---
 
     // Event Listeners
     map.on('click', handleMapClick);
@@ -802,13 +799,12 @@ function initMap() {
     // Initial Data Load
     loadBoundary();
 
-    // --- Tự động lấy ngày đầu tiên có trong DB ---
+    // --- Tự động lấy ngày mới nhất có trong DB ---
     (async () => {
         try {
             const r = await fetch(`${window.API_BASE_URL}/api/dates/DaNang`);
             const env = await r.json();
             if (env.success && env.data?.availableDates) {
-                // Lấy ngày lớn nhất từ availableDates thay vì nhỏ nhất
                 const years = Object.keys(env.data.availableDates).sort();
                 if (years.length > 0) {
                     const y = years[years.length - 1];
@@ -820,12 +816,26 @@ function initMap() {
                             const d = dDays[dDays.length - 1];
                             currentDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                             console.log('📅 Auto-set currentDate from DB:', currentDate);
+
+                            // Sync date-manager UI
+                            if (typeof syncDateUI === 'function') syncDateUI(currentDate);
+                            const datePicker = document.getElementById('date-picker');
+                            if (datePicker) datePicker.value = currentDate;
+                            if (typeof selectedCalendarDate !== 'undefined') {
+                                selectedCalendarDate = currentDate;
+                            }
                         }
                     }
                 }
             }
         } catch (e) {
             console.warn('⚠️ Could not auto-set date from DB, using fallback:', currentDate);
+        }
+
+        // Fallback if API failed and currentDate is still null
+        if (!currentDate) {
+            currentDate = '2023-01-17';
+            console.warn('⚠️ Using hardcoded fallback date:', currentDate);
         }
 
         // Initial Heatmap Update (sau khi có date)

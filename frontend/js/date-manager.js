@@ -16,7 +16,7 @@ const monthNames = [
 function initDateManager() {
     console.log('📅 Initializing Date Manager (Calendar + Input)...');
 
-    // Init state from visual picker if available
+    // Init state from the hidden date picker (may be set by map.js or empty)
     const datePicker = document.getElementById('date-picker');
     if (datePicker && datePicker.value) {
         const parts = datePicker.value.split('-');
@@ -28,11 +28,104 @@ function initDateManager() {
     attachCalendarEvents();
     initManualInputEvents();
 
+    // Fetch latest available date from API and sync UI if not already set
+    fetchAndSetLatestDate();
+
     console.log('✅ Date Manager initialized');
 }
 
 // ─────────────────────────────────────────────────────────
-// 2. CALENDAR UI LOGIC
+// 2. AUTO-DETECT LATEST AVAILABLE DATE
+// ─────────────────────────────────────────────────────────
+async function fetchAndSetLatestDate() {
+    // Skip if a date is already selected (e.g. from URL params or prior navigation)
+    if (selectedCalendarDate) {
+        syncDateUI(selectedCalendarDate);
+        return;
+    }
+
+    try {
+        const region = window.currentRegion || 'DaNang';
+        let latestDate = null;
+
+        // Try DataLoader first (may already be cached)
+        if (window.dataLoader) {
+            const datesInfo = await window.dataLoader.loadAvailableDates(region);
+            if (datesInfo && datesInfo.availableDates) {
+                latestDate = getLatestDateFromAvailable(datesInfo.availableDates);
+            }
+        }
+
+        // Fallback: direct API call
+        if (!latestDate) {
+            const r = await fetch(`${window.API_BASE_URL || ''}/api/dates/${region}`);
+            const env = await r.json();
+            if (env.success && env.data?.availableDates) {
+                latestDate = getLatestDateFromAvailable(env.data.availableDates);
+            }
+        }
+
+        if (latestDate) {
+            console.log('📅 DateManager: Auto-set to latest date:', latestDate);
+            selectedCalendarDate = latestDate;
+            const parts = latestDate.split('-');
+            currentCalendarYear = parseInt(parts[0]);
+            currentCalendarMonth = parseInt(parts[1]) - 1;
+
+            // Sync hidden picker
+            const datePicker = document.getElementById('date-picker');
+            if (datePicker) datePicker.value = latestDate;
+
+            // Sync display button
+            syncDateUI(latestDate);
+
+            // Sync map.js currentDate
+            if (typeof window.currentDate !== 'undefined' || window.currentDate === null) {
+                window.currentDate = latestDate;
+            }
+
+            // Also set the global for map.js (it uses module-level var)
+            if (typeof currentDate !== 'undefined') {
+                // This will be picked up by map.js if it hasn't loaded yet
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ DateManager: Could not auto-detect latest date:', e);
+    }
+}
+
+/**
+ * Extract the latest date string (YYYY-MM-DD) from the nested availableDates structure.
+ */
+function getLatestDateFromAvailable(avail) {
+    const years = Object.keys(avail).sort();
+    if (!years.length) return null;
+    const y = years[years.length - 1];
+    const months = Object.keys(avail[y]).sort();
+    if (!months.length) return null;
+    const m = months[months.length - 1];
+    const days = avail[y][m].sort((a, b) => a - b);
+    if (!days.length) return null;
+    const d = days[days.length - 1];
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
+ * Update the calendar button display text and calendar month/year to match a date.
+ */
+function syncDateUI(dateStr) {
+    const displayBtn = document.getElementById('open-calendar-btn');
+    if (displayBtn) {
+        const [year, month, day] = dateStr.split('-').map(Number);
+        const textEl = displayBtn.querySelector('.date-display-text');
+        if (textEl) {
+            textEl.textContent = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────
+// 3. CALENDAR UI LOGIC
 // ─────────────────────────────────────────────────────────
 function attachCalendarEvents() {
     const openBtn = document.getElementById('open-calendar-btn');

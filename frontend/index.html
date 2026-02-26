@@ -292,7 +292,7 @@
             <!-- Calendar Button -->
             <button id="open-calendar-btn" type="button"
                 class="relative bg-primary text-white pl-4 pr-10 py-2 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer shadow-sm hover:bg-primary/90 transition-colors flex items-center gap-2">
-                <span class="date-display-text">17/01/2023</span>
+                <span class="date-display-text">Loading...</span>
                 <span class="material-icons text-white text-lg">calendar_today</span>
             </button>
 
@@ -312,7 +312,7 @@
             </div>
 
             <!-- Hidden date picker for compatibility -->
-            <input type="date" id="date-picker" class="hidden" value="2023-01-17" min="2000-01-01">
+            <input type="date" id="date-picker" class="hidden" value="" min="2000-01-01">
             <div class="h-8 w-8 rounded-full bg-slate-200 overflow-hidden border border-slate-300">
                 <img alt="User Profile Avatar" class="w-full h-full object-cover" data-alt="User profile avatar"
                     src="https://lh3.googleusercontent.com/aida-public/AB6AXuDgXK1uL4Mbfx-xqN2_FnNbklOPdA_4vb3nR04tyLjmOs6ZqEnmYiMogTVoYWuuSZ7Ap3PiR4sUnuAyLJ0cJu8j634E2GsLll-JOVUlY3XcicMcM1C5WWZSpLG7_GWP5D_AFNAyu9aJHe8Y1qVBujaBVOjDWwSxb6zdsy-Lra8yrpIsede5kwBucQigqQFnrYxcdckMBadEFGNe3_o7HPPh9CwH0CaJHcmnxoIMF3_NjDSSwJL3QxqzPA5-qstR_yvq1cO6H-NikYI" />
@@ -507,21 +507,7 @@
                             </button>
                         </div>
                     </div>
-                    <!-- Navigation Controls -->
-                    <div class="absolute bottom-6 right-6 flex flex-col gap-2 z-10">
-                        <button
-                            class="w-10 h-10 bg-white dark:bg-slate-800 rounded-lg shadow-lg flex items-center justify-center text-slate-600 hover:text-primary hover:bg-slate-50 transition-colors">
-                            <span class="material-icons">add</span>
-                        </button>
-                        <button
-                            class="w-10 h-10 bg-white dark:bg-slate-800 rounded-lg shadow-lg flex items-center justify-center text-slate-600 hover:text-primary hover:bg-slate-50 transition-colors">
-                            <span class="material-icons">remove</span>
-                        </button>
-                        <button
-                            class="w-10 h-10 bg-white dark:bg-slate-800 rounded-lg shadow-lg flex items-center justify-center text-slate-600 hover:text-primary hover:bg-slate-50 transition-colors mt-2">
-                            <span class="material-icons">my_location</span>
-                        </button>
-                    </div>
+
                     <!-- Popup is now handled by Leaflet L.popup() in map.js -->
 
                     <!-- Pixel Parameters Panel removed in favor of Map Popup -->

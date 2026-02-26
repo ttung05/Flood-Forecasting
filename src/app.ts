@@ -22,7 +22,9 @@ app.use('/api', (req, res, next) => {
 });
 
 // Proxy PNG Mask from Cloudflare R2
-import { r2GetBuffer } from './shared/legacy/r2-raster';
+import { r2GetBuffer, tifKey } from './shared/legacy/r2-raster';
+import { LAYER_FOLDER_MAP } from './shared/types/common';
+
 app.get('/api/mask/:region/:date/label.png', async (req, res) => {
     const { region, date } = req.params;
     const r2Key = `FloodData/${region}/Mask/mask_${date}_label.png`;
@@ -36,6 +38,22 @@ app.get('/api/mask/:region/:date/label.png', async (req, res) => {
     }
 });
 
+// Proxy GeoTIFF directly to Frontend GeoRasterLayer
+app.get('/api/tif/:region/:layer/:date', async (req, res) => {
+    const { region, layer, date } = req.params;
+    const layerInfo = LAYER_FOLDER_MAP[layer as any];
+    if (!layerInfo) return res.status(400).send('Invalid layer');
+
+    const r2Key = tifKey(region, layerInfo, date);
+    try {
+        const buf = await r2GetBuffer(r2Key);
+        res.setHeader('Content-Type', 'image/tiff');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(buf);
+    } catch {
+        res.status(404).send('TIF not found');
+    }
+});
 // Mount TS Routers
 app.use('/api', metadataRouter);
 app.use('/api', pixelRouter);
