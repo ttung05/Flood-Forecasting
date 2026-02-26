@@ -10,7 +10,7 @@ class DataLoader {
     constructor() {
         this.cache = new Map();
         this.maxCacheSize = 20;
-        this.currentRegion = 'DBSCL';
+        this.currentRegion = 'DaNang';
         this.availableDates = null;  // { availableDates, totalDays, dateRange, ... }
     }
 
@@ -217,9 +217,6 @@ if (typeof window !== 'undefined') {
 
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('📊 Initializing DataLoader...');
-    await Promise.allSettled([
-        dataLoader.loadAvailableDates('DBSCL'),
-        dataLoader.loadAvailableDates('CentralCoast')
-    ]);
+    await dataLoader.loadAvailableDates('DaNang');
     console.log('✅ DataLoader ready');
 });

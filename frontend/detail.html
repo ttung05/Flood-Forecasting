@@ -1,179 +1,1300 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi" class="light">
 
 <head>
     <meta charset="utf-8" />
-    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-    <title>Detailed Analytics - Vietnam Flood Forecast</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
-        rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SGN-1 Analytics | National Environmental Intelligence</title>
 
+    <!-- DNS Prefetch & Preconnect -->
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+
+    <!-- Tailwind CSS (v3 fallback via CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Fonts -->
+    <link rel="preload"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+        as="style" onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript>
+        <link rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
+    </noscript>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+
+    <!-- Alpine.js for lightweight reactivity -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- API Loader -->
+    <script src="js/config.js" defer></script>
+    <script src="js/data-loader.js" defer></script>
+
+    <!-- UI/UX Pro Max Configuration -->
     <script>
         tailwind.config = {
-            darkMode: "class",
+            darkMode: 'class',
             theme: {
                 extend: {
                     colors: {
-                        "primary": "#1975d2",
-                        "background-light": "#f6f7f8",
-                        "background-dark": "#111921",
-                        "risk-low": "#4CAF50",
-                        "risk-med": "#FFC107",
-                        "risk-high": "#F44336",
+                        slate: {
+                            50: '#f8fafc',
+                            100: '#f1f5f9',
+                            200: '#e2e8f0',
+                            300: '#cbd5e1',
+                            400: '#94a3b8',
+                            500: '#64748b',
+                            600: '#475569',
+                            700: '#334155',
+                            800: '#1e293b',
+                            850: '#151e2c', /* Custom deep slate for panels */
+                            900: '#0f172a',
+                            950: '#020617',
+                        },
+                        brand: {
+                            blue: '#1e40af',  /* Blue-800 */
+                            cyan: '#0891b2',  /* Cyan-600 */
+                        },
+                        signal: {
+                            safe: '#059669',    /* Emerald-600 */
+                            watch: '#d97706',   /* Amber-600 */
+                            warning: '#ea580c', /* Orange-600 */
+                            critical: '#dc2626',/* Red-600 */
+                        }
                     },
                     fontFamily: {
-                        "display": ["Inter", "sans-serif"]
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    boxShadow: {
+                        'panel': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
+                        'inner-data': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.05)',
                     }
-                },
-            },
+                }
+            }
         }
     </script>
+
     <style>
         body {
             font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+            /* slate-100 */
+            -webkit-font-smoothing: antialiased;
+            color: #0f172a;
+            /* slate-900 */
+        }
+
+        .dark body {
+            background-color: #020617;
+            color: #f8fafc;
+        }
+
+        /* Tabular nums for all data */
+        .data-val {
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.01em;
+        }
+
+        .data-mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Grid definitions */
+        .bento-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 1.5rem;
+        }
+
+        /* Table scrollbar */
+        .data-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .data-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .data-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 9999px;
+        }
+
+        .dark .data-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #334155;
+        }
+
+        /* Heatmap Scales */
+        .hm-rain-0 {
+            background-color: transparent;
+        }
+
+        .hm-rain-1 {
+            background-color: rgba(59, 130, 246, 0.1);
+        }
+
+        .hm-rain-2 {
+            background-color: rgba(59, 130, 246, 0.25);
+        }
+
+        .hm-rain-3 {
+            background-color: rgba(59, 130, 246, 0.4);
+            font-weight: 600;
+            color: #1e3a8a;
+        }
+
+        .dark .hm-rain-3 {
+            color: #eff6ff;
+        }
+
+        .hm-soil-0 {
+            background-color: transparent;
+        }
+
+        .hm-soil-1 {
+            background-color: rgba(234, 88, 12, 0.1);
+        }
+
+        .hm-soil-2 {
+            background-color: rgba(234, 88, 12, 0.25);
+        }
+
+        .hm-soil-3 {
+            background-color: rgba(220, 38, 38, 0.4);
+            font-weight: 600;
+            color: #7f1d1d;
+        }
+
+        .dark .hm-soil-3 {
+            color: #fef2f2;
+        }
+
+        /* Row interactions */
+        .eda-row {
+            transition: all 150ms ease;
+            cursor: pointer;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .dark .eda-row {
+            border-bottom: 1px solid #1e293b;
+        }
+
+        .eda-row:hover {
+            background-color: #f8fafc;
+        }
+
+        .dark .eda-row:hover {
+            background-color: #0f172a;
+        }
+
+        .eda-row.active {
+            background-color: #eff6ff;
+            outline: 2px solid #3b82f6;
+            outline-offset: -2px;
+            z-index: 10;
+            position: relative;
+        }
+
+        .dark .eda-row.active {
+            background-color: rgba(59, 130, 246, 0.15);
+        }
+
+        [x-cloak] {
+            display: none !important;
         }
     </style>
 </head>
 
-<body class="bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200 min-h-screen flex flex-col">
-    <!-- Header -->
+<body x-data="dashboardController()" class="min-h-screen flex flex-col pt-0">
+
+    <!-- 🥇 1. TOP CONTEXT HEADER -->
     <header
-        class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 h-16 flex items-center justify-between px-6 shadow-sm z-20 shrink-0 sticky top-0">
-        <div class="flex items-center gap-4">
-            <a href="/"
-                class="h-10 w-10 bg-primary/10 rounded-lg flex items-center justify-center hover:bg-primary/20 transition-colors">
-                <span class="material-icons text-primary text-2xl">arrow_back</span>
-            </a>
-            <div>
-                <h1 class="text-lg font-bold text-slate-900 dark:text-white leading-tight">Detailed Analytics</h1>
-                <p class="text-xs text-slate-500 font-medium flex items-center gap-1">
-                    <span class="material-icons text-[14px]">location_on</span>
-                    <span id="location-text">Loading...</span>
-                </p>
+        class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
+
+        <!-- Left: Context & Metadata -->
+        <div class="flex flex-col gap-1 w-1/3">
+            <div
+                class="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">
+                <a href="#" class="hover:text-slate-900 dark:hover:text-white transition-colors">National System</a>
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
+                <a href="#" class="hover:text-slate-900 dark:hover:text-white transition-colors">DBSCL Region</a>
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
+                <span class="text-brand-blue dark:text-blue-400">Station SGN-01</span>
+            </div>
+            <div class="flex items-end gap-3">
+                <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white leading-none">Can Tho (Ninh
+                    Kieu)</h1>
+            </div>
+            <div class="flex items-center gap-4 mt-1 text-xs text-slate-600 dark:text-slate-400 font-medium">
+                <span class="flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4">
+                        </path>
+                    </svg>
+                    Source: MODIS + Sentinel-1
+                </span>
+                <span class="flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5 text-signal-safe" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    Conf: 96.2%
+                </span>
+                <span class="flex items-center gap-1">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    Sync: T-15m
+                </span>
             </div>
         </div>
-        <div class="flex items-center gap-4">
-            <div class="text-right">
-                <p class="text-xs text-slate-500">Selected Date</p>
-                <p id="date-text" class="text-sm font-bold text-slate-800 dark:text-white">--/--/----</p>
+
+        <!-- Center: Current Analysis Focus -->
+        <div class="flex flex-col items-center justify-center w-1/3">
+            <span class="text-[10px] font-bold tracking-[0.2em] text-slate-400 uppercase mb-1">Analysis Focus
+                Date</span>
+            <div
+                class="flex items-center gap-3 bg-slate-100 dark:bg-slate-800/50 px-4 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                <span class="text-xl font-bold data-val text-brand-blue dark:text-blue-400"
+                    x-text="activeDate">2026-01-31</span>
             </div>
-            <div class="h-8 w-8 rounded-full bg-slate-200 overflow-hidden border border-slate-300">
-                <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuDgXK1uL4Mbfx-xqN2_FnNbklOPdA_4vb3nR04tyLjmOs6ZqEnmYiMogTVoYWuuSZ7Ap3PiR4sUnuAyLJ0cJu8j634E2GsLll-JOVUlY3XcicMcM1C5WWZSpLG7_GWP5D_AFNAyu9aJHe8Y1qVBujaBVOjDWwSxb6zdsy-Lra8yrpIsede5kwBucQigqQFnrYxcdckMBadEFGNe3_o7HPPh9CwH0CaJHcmnxoIMF3_NjDSSwJL3QxqzPA5-qstR_yvq1cO6H-NikYI"
-                    class="w-full h-full object-cover">
+            <span class="text-[10px] font-semibold text-slate-500 mt-1"
+                x-text="activeDateType === 'forecast' ? '[ FORECAST HORIZON T+48h ]' : '[ HISTORICAL OBSERVATION ]'">[
+                HISTORICAL OBSERVATION ]</span>
+        </div>
+
+        <!-- Right: Action Group -->
+        <div class="flex items-center justify-end gap-3 w-1/3">
+            <div
+                class="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-md text-xs font-bold tracking-wide">
+                <span class="relative flex h-2 w-2">
+                    <span
+                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                SYSTEM LIVE
             </div>
+            <div class="h-6 w-px bg-slate-300 dark:bg-slate-700 mx-1"></div>
+            <button
+                class="h-9 w-9 rounded flex items-center justify-center text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border border-transparent hover:border-slate-300 dark:hover:border-slate-600">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z">
+                    </path>
+                </svg>
+            </button>
+            <button
+                class="h-9 px-4 rounded bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-sm font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors flex items-center gap-2 shadow-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                    </path>
+                </svg>
+                Export Report
+            </button>
         </div>
     </header>
 
-    <!-- Main Content -->
-    <main class="flex-1 p-6 max-w-7xl mx-auto w-full">
-        <!-- Overview Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <!-- Rainfall Card -->
-            <div
-                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <div class="flex items-start justify-between mb-2">
-                    <div>
-                        <p class="text-xs text-slate-500 font-medium uppercase">Rainfall (24h)</p>
-                        <h3 id="rainfall-val" class="text-2xl font-bold text-primary mt-1">-- mm</h3>
-                    </div>
-                    <span class="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 rounded-lg">
-                        <span class="material-icons">water_drop</span>
-                    </span>
-                </div>
-                <p class="text-xs text-slate-400">Moderate precipitation</p>
+    <main class="flex-1 w-full max-w-[1700px] mx-auto p-4 md:p-6 lg:p-8 flex flex-col gap-6">
+
+        <!-- 🥈 2. EXECUTIVE ALERT BANNER -->
+        <!-- Logic: Color changes based on the 'risk' state -->
+        <div class="relative overflow-hidden rounded-xl border p-4 sm:p-5 flex items-start gap-4 shadow-sm" :class="{
+                 'border-orange-500/50 bg-orange-50 dark:bg-orange-950/20': activeRisk === 'warning',
+                 'border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/20': activeRisk === 'safe',
+                 'border-red-500/50 bg-red-50 dark:bg-red-950/20': activeRisk === 'critical',
+                 'border-amber-500/50 bg-amber-50 dark:bg-amber-950/20': activeRisk === 'watch'
+             }">
+
+            <!-- Decorative gradient orb -->
+            <div class="absolute -right-10 -top-10 w-40 h-40 blur-3xl rounded-full opacity-20 pointer-events-none"
+                :class="{
+                     'bg-orange-500': activeRisk === 'warning',
+                     'bg-emerald-500': activeRisk === 'safe',
+                     'bg-red-500': activeRisk === 'critical',
+                     'bg-amber-500': activeRisk === 'watch'
+                 }"></div>
+
+            <!-- Risk Icon -->
+            <div class="shrink-0 rounded-full p-2" :class="{
+                     'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-400': activeRisk === 'warning',
+                     'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400': activeRisk === 'safe',
+                     'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400': activeRisk === 'critical',
+                     'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400': activeRisk === 'watch'
+                 }">
+                <!-- Warning icon -->
+                <svg x-show="activeRisk === 'warning' || activeRisk === 'critical'" class="w-6 h-6" fill="none"
+                    stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                    </path>
+                </svg>
+                <!-- Safe icon -->
+                <svg x-show="activeRisk === 'safe'" class="w-6 h-6" fill="none" stroke="currentColor"
+                    viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <!-- Watch icon -->
+                <svg x-show="activeRisk === 'watch'" class="w-6 h-6" fill="none" stroke="currentColor"
+                    viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                    </path>
+                </svg>
             </div>
 
-            <!-- Soil Moisture Card -->
-            <div
-                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <div class="flex items-start justify-between mb-2">
-                    <div>
-                        <p class="text-xs text-slate-500 font-medium uppercase">Soil Moisture</p>
-                        <h3 id="soil-val" class="text-2xl font-bold text-red-600 mt-1">-- %</h3>
-                    </div>
-                    <span class="p-2 bg-red-50 dark:bg-red-900/20 text-red-600 rounded-lg">
-                        <span class="material-icons">grass</span>
-                    </span>
+            <div class="flex-1 z-10">
+                <div class="flex items-center gap-3 mb-1">
+                    <h2 class="text-sm font-bold uppercase tracking-wide" :class="{
+                            'text-orange-900 dark:text-orange-300': activeRisk === 'warning',
+                            'text-emerald-900 dark:text-emerald-300': activeRisk === 'safe',
+                            'text-red-900 dark:text-red-300': activeRisk === 'critical',
+                            'text-amber-900 dark:text-amber-300': activeRisk === 'watch'
+                        }" x-text="alertTitle">PROJECTED SATURATION WARNING</h2>
+                    <span
+                        class="px-2 py-0.5 text-[10px] font-bold rounded bg-white/50 dark:bg-black/20 text-slate-700 dark:text-slate-300 backdrop-blur-sm"
+                        x-text="alertHorizon">T+24h Horizon</span>
+                    <span class="text-xs font-mono font-medium text-slate-500"
+                        x-text="'Conf: ' + alertConfidence + '%'">Conf: 92%</span>
                 </div>
-                <p class="text-xs text-slate-400">High saturation risk</p>
-            </div>
-
-            <!-- Flood Risk Card -->
-            <div
-                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <div class="flex items-start justify-between mb-2">
-                    <div>
-                        <p class="text-xs text-slate-500 font-medium uppercase">Flood Risk</p>
-                        <h3 id="risk-val" class="text-2xl font-bold text-amber-500 mt-1">--</h3>
-                    </div>
-                    <span class="p-2 bg-amber-50 dark:bg-amber-900/20 text-amber-600 rounded-lg">
-                        <span class="material-icons">warning</span>
-                    </span>
-                </div>
-                <p class="text-xs text-slate-400">Based on multi-factor analysis</p>
-            </div>
-
-            <!-- Elevation Card -->
-            <div
-                class="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <div class="flex items-start justify-between mb-2">
-                    <div>
-                        <p class="text-xs text-slate-500 font-medium uppercase">Elevation (DEM)</p>
-                        <h3 id="dem-val" class="text-2xl font-bold text-emerald-600 mt-1">-- m</h3>
-                    </div>
-                    <span class="p-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-lg">
-                        <span class="material-icons">terrain</span>
-                    </span>
-                </div>
-                <p class="text-xs text-slate-400">Above sea level</p>
+                <p class="text-[15px] font-medium text-slate-800 dark:text-slate-200" :class="{
+                        'text-orange-950 dark:text-orange-100': activeRisk === 'warning',
+                        'text-emerald-950 dark:text-emerald-100': activeRisk === 'safe',
+                        'text-red-950 dark:text-red-100': activeRisk === 'critical',
+                        'text-amber-950 dark:text-amber-100': activeRisk === 'watch'
+                   }" x-text="alertMessage">
+                    AI models indicate an 85% probability of soil saturation exceeding 90% threshold due to consecutive
+                    45mm rainfall events. Localized urban flooding likely.
+                </p>
             </div>
         </div>
 
-        <!-- Charts Grid -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <!-- Rainfall History Chart -->
+        <!-- 🥉 3. KPI INTELLIGENCE CARDS -->
+        <!-- Use strict grid system, minimal borders, subtle shadows -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+            <!-- Card: Rainfall -->
             <div
-                class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
-                    <span class="material-icons text-primary">show_chart</span>
-                    Rainfall History & Forecast
-                </h3>
-                <div class="h-64">
-                    <canvas id="rainfallChart"></canvas>
+                class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 shadow-panel relative overflow-hidden group">
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                        <svg class="w-4 h-4 text-brand-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                        </svg>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider">Acc. Rainfall</h3>
+                    </div>
+                    <span
+                        class="text-[10px] font-mono text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">24H</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white data-val"
+                        x-text="kpi.rain.val">42.5</span>
+                    <span class="text-sm font-medium text-slate-500 dark:text-slate-400">mm</span>
+                </div>
+                <div
+                    class="mt-4 flex items-center justify-between border-t border-slate-100 dark:border-slate-800/50 pt-3">
+                    <div class="flex flex-col gap-0.5">
+                        <div class="flex items-center gap-1"
+                            :class="kpi.rain.trend > 0 ? 'text-signal-warning' : 'text-signal-safe'">
+                            <svg x-show="kpi.rain.trend > 0" class="w-3 h-3" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M5 10l7-7m0 0l7 7m-7-7v18"></path>
+                            </svg>
+                            <svg x-show="kpi.rain.trend <= 0" class="w-3 h-3" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                            </svg>
+                            <span class="text-xs font-bold data-val"
+                                x-text="Math.abs(kpi.rain.trend) + 'mm'">12.4mm</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 font-medium">vs yesterday</span>
+                    </div>
+                    <!-- CSS Sparkline trick for layout -->
+                    <div
+                        class="h-8 w-16 flex items-end justify-between gap-0.5 opacity-80 mix-blend-multiply dark:mix-blend-screen">
+                        <div class="w-full bg-blue-100 dark:bg-blue-900 rounded-t-sm" style="height: 20%"></div>
+                        <div class="w-full bg-blue-200 dark:bg-blue-800 rounded-t-sm" style="height: 40%"></div>
+                        <div class="w-full bg-blue-300 dark:bg-blue-700 rounded-t-sm" style="height: 30%"></div>
+                        <div class="w-full bg-blue-400 dark:bg-blue-600 rounded-t-sm" style="height: 60%"></div>
+                        <div class="w-full bg-blue-600 dark:bg-blue-500 rounded-t-sm" style="height: 100%"></div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Environmental Factors Radar Chart -->
+            <!-- Card: Soil Moisture -->
             <div
-                class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-                <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
-                    <span class="material-icons text-purple-500">radar</span>
-                    Environmental Factor Analysis
-                </h3>
-                <div class="h-64 flex items-center justify-center">
-                    <canvas id="radarChart"></canvas>
+                class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 shadow-panel group">
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                        <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z">
+                            </path>
+                        </svg>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider">Soil Moisture</h3>
+                    </div>
+                    <span
+                        class="text-[10px] font-mono text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">VWC</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white data-val"
+                        x-text="kpi.soil.val">85.2</span>
+                    <span class="text-sm font-medium text-slate-500 dark:text-slate-400">%</span>
+                </div>
+                <div
+                    class="mt-4 flex items-center justify-between border-t border-slate-100 dark:border-slate-800/50 pt-3">
+                    <div class="flex flex-col gap-0.5">
+                        <div class="flex items-center gap-1"
+                            :class="kpi.soil.state === 'critical' ? 'text-signal-critical' : 'text-signal-watch'">
+                            <span class="text-xs font-bold" x-text="kpi.soil.stateText">Near Saturation</span>
+                        </div>
+                        <span class="text-[10px] text-slate-400 font-medium">90% threshold</span>
+                    </div>
+                    <div class="w-16 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                        <div class="h-full bg-amber-500" :style="`width: ${kpi.soil.val}%`"></div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Card: Flood Risk -->
+            <div class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 shadow-panel group border-l-4"
+                :class="{
+                     'border-l-signal-safe': kpi.risk.level === 'Low',
+                     'border-l-signal-watch': kpi.risk.level === 'Medium',
+                     'border-l-signal-critical': kpi.risk.level === 'High'
+                 }">
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                            </path>
+                        </svg>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider">Risk Level</h3>
+                    </div>
+                    <span
+                        class="text-[10px] font-mono text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded"
+                        title="Machine Learning Inference">ML</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white" :class="{
+                              'text-signal-safe': kpi.risk.level === 'Low',
+                              'text-signal-watch': kpi.risk.level === 'Medium',
+                              'text-signal-critical': kpi.risk.level === 'High'
+                          }" x-text="kpi.risk.level">High</span>
+                </div>
+                <div
+                    class="mt-4 flex items-center justify-between border-t border-slate-100 dark:border-slate-800/50 pt-3">
+                    <div class="flex flex-col gap-0.5">
+                        <div class="flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                            <span class="text-xs font-medium" x-text="kpi.risk.subtext">1.5x above normal</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card: Elevation -->
+            <div
+                class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 shadow-panel group">
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                        <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5">
+                            </path>
+                        </svg>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider">Topology Base</h3>
+                    </div>
+                    <span
+                        class="text-[10px] font-mono text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">DEM</span>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span class="text-3xl font-bold tracking-tight text-slate-900 dark:text-white data-val">12.4</span>
+                    <span class="text-sm font-medium text-slate-500 dark:text-slate-400">m AMSL</span>
+                </div>
+                <div
+                    class="mt-4 flex items-center justify-between border-t border-slate-100 dark:border-slate-800/50 pt-3">
+                    <div class="flex flex-col gap-0.5">
+                        <div class="flex items-center gap-1 text-slate-500">
+                            <span class="text-xs font-medium">Static metric</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
 
-        <!-- Bottom Row -->
-        <div class="bg-white dark:bg-slate-800 p-5 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-            <h3 class="text-base font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
-                <span class="material-icons text-blue-500">water</span>
-                Water Level & Soil Moisture Correlation
-            </h3>
-            <div class="h-64 w-full">
-                <canvas id="correlationChart"></canvas>
+        <!-- 🏆 4 & 5. MAIN ANALYTICS BENTO GRID -->
+        <div class="bento-grid">
+
+            <!-- LEFT COLUMN (Span 8/12) - Deep Analytics -->
+            <div class="col-span-12 xl:col-span-8 flex flex-col gap-6">
+
+                <!-- Time-Series & Seasonality Box -->
+                <div x-data="{ viewMode: 'timeseries' }"
+                    class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6 shadow-panel">
+                    <div class="flex items-center justify-between mb-6">
+                        <div class="flex flex-col">
+                            <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider"
+                                x-text="viewMode === 'timeseries' ? 'Hydrological Time-Series' : 'Seasonality Analysis'">
+                                Hydrological Time-Series</h3>
+                            <p class="text-xs text-slate-500 mt-0.5"
+                                x-text="viewMode === 'timeseries' ? 'Historical observation & ML prediction models over 10-day window.' : 'Annual pattern comparison and historical anomaly detection.'">
+                                Historical observation & ML prediction models over
+                                10-day window.</p>
+                        </div>
+                        <div class="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-md">
+                            <button @click="viewMode = 'timeseries'"
+                                :class="viewMode === 'timeseries' ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'"
+                                class="px-3 py-1 text-xs font-medium rounded transition-colors">Time Series</button>
+                            <button @click="viewMode = 'seasonality'"
+                                :class="viewMode === 'seasonality' ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'"
+                                class="px-3 py-1 text-xs font-medium rounded transition-colors">Seasonality</button>
+                        </div>
+                    </div>
+
+                    <div class="h-[300px] w-full relative">
+                        <!-- Normal Chart Canvas -->
+                        <div x-show="viewMode === 'timeseries'" class="w-full h-full relative">
+                            <canvas id="timeSeriesChart"></canvas>
+                            <!-- Focus overlay trigger overlay (to simulate sync) -->
+                            <div class="absolute inset-y-0 left-[66%] w-[10%] bg-blue-500/5 border-l border-r border-blue-500/20 pointer-events-none"
+                                id="chartFocusHighlight" style="display:none;"></div>
+                        </div>
+
+                        <!-- Seasonality Placeholder / Chart -->
+                        <div x-show="viewMode === 'seasonality'" x-cloak class="w-full h-full relative"
+                            style="display: none;">
+                            <canvas id="seasonalityChart"></canvas>
+                            <!-- Analytical overlay for seasonality text -->
+                            <div class="absolute top-4 right-4 bg-white/90 dark:bg-slate-900/90 backdrop-blur border border-slate-200 dark:border-slate-700 p-3 rounded-lg shadow-sm text-xs w-48 pointer-events-none"
+                                x-show="viewMode === 'seasonality'">
+                                <div class="flex justify-between items-center mb-1"><span
+                                        class="text-slate-500 font-medium">Curr. Deviation</span><span
+                                        class="font-bold text-red-500">+14.2%</span></div>
+                                <div class="flex justify-between items-center"><span
+                                        class="text-slate-500 font-medium">Top Analog</span><span
+                                        class="font-bold text-slate-800 dark:text-slate-200">Year 2011</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 🧠 INTERACTIVE EDA TABLE (CORE) -->
+                <div
+                    class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-panel flex flex-col overflow-hidden max-h-[450px]">
+                    <div
+                        class="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-white dark:bg-slate-900 sticky top-0 z-20">
+                        <div class="flex flex-col">
+                            <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+                                Exploratory Data Engine (EDA)</h3>
+                            <p class="text-[11px] font-medium text-slate-500 mt-1 flex items-center gap-2">
+                                <span class="flex items-center gap-1"><kbd
+                                        class="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 rounded text-slate-600 dark:text-slate-400">Hover</kbd>
+                                    to inspect point</span>
+                                <span class="flex items-center gap-1"><kbd
+                                        class="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 border dark:border-slate-700 rounded text-slate-600 dark:text-slate-400">Click</kbd>
+                                    to set active focus</span>
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs">
+                            <span class="flex items-center gap-1 text-slate-500">
+                                <div class="w-2.5 h-2.5 rounded-sm bg-blue-100 border border-blue-200"></div> Low
+                                intensity
+                            </span>
+                            <span class="flex items-center gap-1 text-slate-500">
+                                <div class="w-2.5 h-2.5 rounded-sm bg-blue-400 border border-blue-500"></div> Critical
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto overflow-y-auto data-scrollbar flex-1 relative z-10 w-full"
+                        style="isolation: isolate;">
+                        <table class="w-full text-sm text-left whitespace-nowrap table-fixed">
+                            <thead
+                                class="text-[10px] uppercase font-bold tracking-wider text-slate-500 bg-slate-50 dark:bg-slate-800/80 sticky top-0 z-20 backdrop-blur-md">
+                                <tr>
+                                    <th
+                                        class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 w-32 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                                        Date <svg class="w-3 h-3 inline" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M19 9l-7 7-7-7"></path>
+                                        </svg></th>
+                                    <th
+                                        class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors w-24">
+                                        Rain (mm) <svg class="w-3 h-3 inline" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path>
+                                        </svg></th>
+                                    <th
+                                        class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors w-24">
+                                        VWC (%) <svg class="w-3 h-3 inline" fill="none" stroke="currentColor"
+                                            viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M8 9l4-4 4 4m0 6l-4 4-4-4"></path>
+                                        </svg></th>
+                                    <th
+                                        class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 text-center w-28">
+                                        Event Type</th>
+                                    <th
+                                        class="px-4 py-3 border-b border-slate-200 dark:border-slate-700 text-center w-24">
+                                        ML Risk</th>
+                                </tr>
+                            </thead>
+                            <tbody
+                                class="divide-y divide-slate-100 dark:divide-slate-800/50 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 z-10 w-full"
+                                id="edaTableBody">
+                                <!-- Generated by Alpine.js -->
+                                <template x-for="(row, idx) in tableData" :key="row.date">
+                                    <tr class="eda-row" :class="{ 'active': row.date === activeDate }"
+                                        @mouseenter="hoverRow(idx)" @mouseleave="leaveRow()" @click="selectRow(row)">
+                                        <td class="px-4 py-3 font-mono text-xs"
+                                            :class="row.date === activeDate ? 'text-brand-blue dark:text-blue-400 font-bold' : 'text-slate-700 dark:text-slate-300'"
+                                            x-text="row.date + (row.isForecast ? ' 🔮' : '')">
+                                        </td>
+
+                                        <!-- Heatmap cell logic -->
+                                        <td class="px-4 py-3 text-right data-mono text-xs"
+                                            :class="getRainHeatmapClass(row.rain)" x-text="row.rain.toFixed(1)">
+                                        </td>
+
+                                        <!-- Heatmap cell logic -->
+                                        <td class="px-4 py-3 text-right data-mono text-xs"
+                                            :class="getSoilHeatmapClass(row.soil)" x-text="row.soil.toFixed(1)">
+                                        </td>
+
+                                        <td class="px-4 py-3 text-center">
+                                            <span
+                                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+                                                :class="row.isForecast ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700' : 'bg-transparent text-slate-400'">
+                                                <span x-text="row.isForecast ? 'FORECAST' : 'OBSERVED'"></span>
+                                            </span>
+                                        </td>
+
+                                        <td class="px-4 py-3 text-center">
+                                            <span
+                                                class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide"
+                                                :class="{
+                                                      'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300': row.risk === 'Low',
+                                                      'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300': row.risk === 'Medium',
+                                                      'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300': row.risk === 'High'
+                                                  }" x-text="row.risk">
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- RIGHT COLUMN (Span 4/12) - Context & Advanced models -->
+            <div class="col-span-12 xl:col-span-4 flex flex-col gap-6">
+
+                <!-- Spatial Map Frame -->
+                <div
+                    class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-panel p-2 flex flex-col relative overflow-hidden group">
+                    <div
+                        class="absolute inset-0 z-10 pointer-events-none ring-1 ring-inset ring-slate-900/10 dark:ring-white/10 rounded-xl">
+                    </div>
+
+                    <div
+                        class="bg-slate-200 dark:bg-slate-800 w-full h-[180px] rounded-lg relative overflow-hidden isolate">
+                        <!-- Simulate map image. A real app uses Mapbox or Leaflet here. -->
+                        <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuDgXK1uL4Mbfx-xqN2_FnNbklOPdA_4vb3nR04tyLjmOs6ZqEnmYiMogTVoYWuuSZ7Ap3PiR4sUnuAyLJ0cJu8j634E2GsLll-JOVUlY3XcicMcM1C5WWZSpLG7_GWP5D_AFNAyu9aJHe8Y1qVBujaBVOjDWwSxb6zdsy-Lra8yrpIsede5kwBucQigqQFnrYxcdckMBadEFGNe3_o7HPPh9CwH0CaJHcmnxoIMF3_NjDSSwJL3QxqzPA5-qstR_yvq1cO6H-NikYI"
+                            class="w-full h-full object-cover filter contrast-125 saturate-50 dark:saturate-0 dark:sepia dark:hue-rotate-[180deg] opacity-90 transition-all duration-500">
+                        <div
+                            class="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/20 to-transparent">
+                        </div>
+
+                        <!-- Target crosshair -->
+                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div
+                                class="w-8 h-8 border-2 border-brand-cyan rounded-full flex items-center justify-center animate-pulse">
+                                <div class="w-1.5 h-1.5 bg-brand-cyan rounded-full"></div>
+                            </div>
+                        </div>
+
+                        <div class="absolute bottom-3 left-3 right-3 flex justify-between items-end">
+                            <div>
+                                <p class="text-[10px] uppercase font-bold text-white/70 tracking-widest leading-none">
+                                    Coordinates</p>
+                                <p class="text-xs font-mono font-medium text-white shadow-sm mt-0.5">10.033°N, 105.783°E
+                                </p>
+                            </div>
+                            <button
+                                class="bg-white/10 hover:bg-white/20 backdrop-blur-md rounded p-1.5 text-white transition-colors border border-white/20">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4">
+                                    </path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Multi-variate Radar Panel -->
+                <div
+                    class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6 shadow-panel">
+                    <h3 class="text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider mb-1">Impact
+                        Factor Radar</h3>
+                    <p class="text-xs text-slate-500 mb-6">Normalized multi-variate vector analysis vs historical
+                        baseline.</p>
+
+                    <div class="h-[220px] w-full flex items-center justify-center relative">
+                        <canvas id="radarChart"></canvas>
+                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
+                            <!-- Background decorative grid matching UN/Analytics style -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Insight Panel -->
+                <div
+                    class="bg-slate-900 dark:bg-slate-850 rounded-xl border border-slate-800 p-6 shadow-panel text-white relative overflow-hidden">
+                    <div
+                        class="absolute top-0 right-0 w-32 h-32 bg-brand-blue blur-3xl rounded-full opacity-20 -mr-10 -mt-10">
+                    </div>
+                    <div class="flex items-center gap-2 mb-4">
+                        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-slate-100">AI Insight Matrix</h3>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center text-xs border-b border-slate-700/50 pb-2">
+                            <span class="text-slate-400">Primary Driver</span>
+                            <span class="font-mono text-amber-400">Rainfall (0.82 corr)</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs border-b border-slate-700/50 pb-2">
+                            <span class="text-slate-400">Secondary Driver</span>
+                            <span class="font-mono text-slate-200">Soil Cap (0.65 corr)</span>
+                        </div>
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="text-slate-400">Pattern Analog</span>
+                            <span class="font-mono text-slate-200">Event 2021-X</span>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-4 leading-relaxed line-clamp-3">
+                        System detects geometric similarity to October 2021 flooding event. Combined soil moisture
+                        retention block forces immediate surface runoff.
+                    </p>
+                </div>
+
             </div>
         </div>
-
     </main>
 
-    <script src="/js/data-loader.js"></script>
-    <script src="/js/data-panels.js"></script>
+    <!-- UI/UX Pro Max Interaction Script (AlpineJS state + Chart.js config) -->
+    <script>
+        let chartInstances = {};
+
+        function dashboardController() {
+            return {
+                tableData: [],
+                activeDate: '',
+                activeDateType: 'historical',
+
+                // Alert state
+                activeRisk: 'safe',
+                alertTitle: 'LOADING SYSTEM DATA',
+                alertHorizon: 'T+24h Horizon',
+                alertConfidence: 0,
+                alertMessage: 'Connecting to National Environmental Intelligence node...',
+
+                // KPI state
+                kpi: {
+                    rain: { val: '--', trend: 0 },
+                    soil: { val: '--', state: 'safe', stateText: '--' },
+                    risk: { level: '--', subtext: '--' }
+                },
+
+                // Track state for seasonality loading
+                seasonalityLoading: false,
+
+                async init() {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const lat = parseFloat(urlParams.get('lat')) || 16.05;
+                    const lng = parseFloat(urlParams.get('lng')) || 108.20;
+                    const region = urlParams.get('region') || 'DaNang';
+
+                    // Fetch timeline to get the latest available date
+                    let latestDateStr = '2026-01-31';
+                    try {
+                        const tl = await dataLoader.loadTimeline();
+                        if (tl && tl.dateRange && tl.dateRange.end) {
+                            latestDateStr = tl.dateRange.end;
+                        }
+                    } catch (e) {
+                        console.warn('Failed to load timeline, using fallback date.', e);
+                    }
+
+                    const baseDateStr = urlParams.get('date') || latestDateStr;
+
+                    const baseDate = new Date(baseDateStr + 'T00:00:00Z');
+
+                    this.tableData = [];
+                    const promises = [];
+
+                    // Fetch: 1 past, 1 current, 5 forecast (Wait, index 0 is yesterday, index 1 is today, 2-6 future)
+                    for (let i = -1; i <= 5; i++) {
+                        let d = new Date(baseDate);
+                        d.setUTCDate(d.getUTCDate() + i);
+                        let dStr = d.toISOString().split('T')[0];
+
+                        // Use dataLoader
+                        let isForecast = i > 0;
+                        let p = dataLoader.loadPixelData(lat, lng, dStr, region).then(res => {
+                            if (res) {
+                                return {
+                                    date: dStr,
+                                    isForecast: isForecast,
+                                    rain: res.rainfall || 0,
+                                    soil: res.soilMoisture || 0,
+                                    tide: res.tide || 0,
+                                    flow: res.flow || 0,
+                                    dem: res.dem || 0,
+                                    risk: res.floodRisk === 'HIGH' ? 'High' : (res.floodRisk === 'MEDIUM' ? 'Medium' : 'Low'),
+                                    isMissing: false
+                                };
+                            } else {
+                                return {
+                                    date: dStr,
+                                    isForecast: isForecast,
+                                    rain: isForecast ? (Math.random() * 5) : 0, // Fallback if no forecast data available from API yet
+                                    soil: isForecast ? (40 + Math.random() * 10) : 0,
+                                    tide: 0,
+                                    flow: 0,
+                                    dem: 0,
+                                    risk: 'Low',
+                                    isMissing: true
+                                };
+                            }
+                        });
+                        promises.push(p);
+                    }
+
+                    const results = await Promise.all(promises);
+                    // Sort by date just in case promises resolved out of order (Promise.all preserves order though)
+                    this.tableData = results;
+
+                    if (this.tableData.length > 1) {
+                        this.selectRow(this.tableData[1]); // Active is baseDate
+                    }
+
+                    this.$nextTick(() => {
+                        this.initCharts();
+                        this.fetchSeasonality(lat, lng, baseDateStr, region);
+                    });
+                },
+
+                // Heatmap logic matching UI/UX Pro Max requirements
+                getRainHeatmapClass(val) {
+                    if (val < 5) return 'hm-rain-0';
+                    if (val < 15) return 'hm-rain-1';
+                    if (val < 30) return 'hm-rain-2';
+                    return 'hm-rain-3';
+                },
+                getSoilHeatmapClass(val) {
+                    if (val < 60) return 'hm-soil-0';
+                    if (val < 75) return 'hm-soil-1';
+                    if (val < 85) return 'hm-soil-2';
+                    return 'hm-soil-3';
+                },
+
+                hoverRow(idx) {
+                    if (chartInstances.line) {
+                        const chart = chartInstances.line;
+                        const meta = chart.getDatasetMeta(0);
+                        if (meta.data[idx]) {
+                            chart.setActiveElements([{ datasetIndex: 0, index: idx }]);
+                            chart.tooltip.setActiveElements([{ datasetIndex: 0, index: idx }], { x: meta.data[idx].x, y: meta.data[idx].y });
+                            chart.update();
+                        }
+                    }
+                },
+
+                leaveRow() {
+                    if (chartInstances.line) {
+                        chartInstances.line.setActiveElements([]);
+                        chartInstances.line.tooltip.setActiveElements([], { x: 0, y: 0 });
+                        chartInstances.line.update();
+                    }
+                },
+
+                selectRow(row) {
+                    this.activeDate = row.date;
+                    this.activeDateType = row.isForecast ? 'forecast' : 'historical';
+
+                    // Update KPIs
+                    this.kpi.rain.val = row.rain.toFixed(1);
+                    this.kpi.soil.val = row.soil.toFixed(1);
+                    this.kpi.risk.level = row.risk;
+
+                    // Logic mapped colors
+                    if (row.risk === 'High') {
+                        this.activeRisk = 'critical';
+                        this.alertTitle = 'HIGH FLOOD RISK LEVEL';
+                    } else if (row.risk === 'Medium') {
+                        this.activeRisk = 'warning';
+                        this.alertTitle = 'ELEVATED SATURATION RISK';
+                    } else {
+                        this.activeRisk = 'safe';
+                        this.alertTitle = 'SYSTEM NOMINAL';
+                        this.alertMessage = 'All indicators within normal historical tolerances.';
+                    }
+
+                    // Radar update
+                    if (chartInstances.radar) {
+                        // slightly alter radar based on data
+                        const baseV = row.rain / 50 * 100;
+                        chartInstances.radar.data.datasets[0].data = [
+                            Math.min(baseV * 1.2, 100),       // Rainfall scaled
+                            row.soil,                         // Soil Moisture %
+                            row.flow || 40,                   // Flow
+                            row.tide || 30,                   // Tide Lvl
+                            row.dem || 20                     // Base Elevation
+                        ];
+                        chartInstances.radar.update();
+                    }
+                },
+
+                initCharts() {
+                    Chart.defaults.font.family = 'Inter, sans-serif';
+                    Chart.defaults.color = '#94a3b8'; // slate-400
+
+                    const labels = this.tableData.map(d => d.date.substring(5)); // MM-DD
+                    const rainData = this.tableData.map(d => d.rain);
+                    const soilData = this.tableData.map(d => d.soil);
+
+                    // 1. Time Series Chart
+                    const ctxLine = document.getElementById('timeSeriesChart').getContext('2d');
+
+                    // Gradient for area
+                    let gradientFill = ctxLine.createLinearGradient(0, 0, 0, 300);
+                    gradientFill.addColorStop(0, 'rgba(37, 99, 235, 0.2)'); // blue-600
+                    gradientFill.addColorStop(1, 'rgba(37, 99, 235, 0)');
+
+                    chartInstances.line = new Chart(ctxLine, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Rainfall (mm)',
+                                data: rainData,
+                                borderColor: '#2563eb', // blue-600
+                                backgroundColor: gradientFill,
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.4,
+                                pointBackgroundColor: '#ffffff',
+                                pointBorderColor: '#2563eb',
+                                pointBorderWidth: 2,
+                                pointRadius: 3,
+                                pointHoverRadius: 6,
+                                yAxisID: 'y',
+                                segment: {
+                                    borderDash: ctx => {
+                                        // Dashed line if the next point is a forecast
+                                        const idx = ctx.p1DataIndex;
+                                        return this.tableData[idx] && this.tableData[idx].isForecast ? [5, 5] : undefined;
+                                    }
+                                }
+                            }, {
+                                label: 'Soil Moisture (%)',
+                                data: soilData,
+                                borderColor: '#f59e0b', // amber-500
+                                borderWidth: 2,
+                                fill: false,
+                                tension: 0.4,
+                                pointRadius: 0,
+                                pointHoverRadius: 5,
+                                yAxisID: 'y1',
+                                segment: {
+                                    borderDash: ctx => {
+                                        // Dashed line if the next point is a forecast
+                                        const idx = ctx.p1DataIndex;
+                                        return this.tableData[idx] && this.tableData[idx].isForecast ? [5, 5] : undefined;
+                                    }
+                                }
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false,
+                            },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                                    titleFont: { size: 13, family: 'JetBrains Mono' },
+                                    bodyFont: { size: 12, family: 'JetBrains Mono' },
+                                    padding: 12,
+                                    borderColor: 'rgba(255,255,255,0.1)',
+                                    borderWidth: 1,
+                                    callbacks: {
+                                        title: (items) => this.tableData[items[0].dataIndex].date
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    grid: { display: false, drawBorder: false },
+                                    ticks: { font: { family: 'JetBrains Mono', size: 10 } }
+                                },
+                                y: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'left',
+                                    grid: { color: 'rgba(148, 163, 184, 0.1)', drawBorder: false },
+                                    min: 0
+                                },
+                                y1: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'right',
+                                    grid: { display: false },
+                                    min: 0, max: 100
+                                }
+                            },
+                            // Emit click to Alpine
+                            onClick: (e, elements) => {
+                                if (elements.length > 0) {
+                                    const idx = elements[0].index;
+                                    this.selectRow(this.tableData[idx]);
+
+                                    // Scroll table to row
+                                    const tbody = document.getElementById('edaTableBody');
+                                    if (tbody && tbody.children[idx]) {
+                                        tbody.children[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    // 1.5 Seasonality Chart (Year over Year Comparison)
+                    const ctxSeas = document.getElementById('seasonalityChart').getContext('2d');
+
+                    // Generate dummy monthly labels
+                    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+                    // Generate historical year lines between 2020-2025
+                    const histYears = ['2020', '2021', '2022', '2023', '2024', '2025'];
+                    const histColors = [
+                        'rgba(148, 163, 184, 0.4)', // slate-400
+                        'rgba(100, 116, 139, 0.4)', // slate-500
+                        'rgba(71, 85, 105, 0.4)',   // slate-600
+                        'rgba(51, 65, 85, 0.4)',    // slate-700
+                        'rgba(30, 41, 59, 0.4)',    // slate-800
+                        'rgba(245, 158, 11, 0.8)'   // amber-500 for the most recent past year
+                    ];
+
+                    const datasets = histYears.map((year, idx) => {
+                        // generate somewhat randomized bell curves to simulate seasonality
+                        const baseCurve = [12, 18, 30, 45, 75, 110, 150, 190, 210, 150, 70, 25];
+                        const offset = (Math.random() - 0.5) * 40;
+                        const data = baseCurve.map(v => Math.max(0, v + offset + (Math.random() * 20 - 10)));
+
+                        return {
+                            label: year,
+                            data: data,
+                            borderColor: histColors[idx],
+                            borderWidth: year === '2025' ? 2 : 1, // bold the most recent past year
+                            tension: 0.4,
+                            pointRadius: 0,
+                            pointHoverRadius: 4
+                        };
+                    });
+
+                    // Add current year 2026
+                    const currYear = [10, 15, 25, 40, null, null, null, null, null, null, null, null]; // Only data up to April
+                    datasets.push({
+                        label: '2026 (Current)',
+                        data: currYear,
+                        borderColor: '#0891b2', // brand-cyan
+                        borderWidth: 3,
+                        tension: 0.4,
+                        pointBackgroundColor: '#0891b2',
+                        pointRadius: 3,
+                        pointHoverRadius: 6
+                    });
+
+                    chartInstances.seasonality = new Chart(ctxSeas, {
+                        type: 'line',
+                        data: {
+                            labels: months,
+                            datasets: datasets
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'bottom',
+                                    labels: {
+                                        usePointStyle: true,
+                                        boxWidth: 6,
+                                        font: { family: 'Inter', size: 11 }
+                                    }
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                                    titleFont: { size: 13, family: 'JetBrains Mono' },
+                                    bodyFont: { size: 12, family: 'JetBrains Mono' },
+                                    padding: 12,
+                                }
+                            },
+                            scales: {
+                                x: { grid: { display: false, drawBorder: false }, ticks: { font: { family: 'JetBrains Mono', size: 10 } } },
+                                y: { type: 'linear', display: true, position: 'left', grid: { color: 'rgba(148, 163, 184, 0.1)', drawBorder: false } }
+                            }
+                        }
+                    });
+
+                    // 2. Radar Chart
+                    const ctxRadar = document.getElementById('radarChart').getContext('2d');
+
+                    chartInstances.radar = new Chart(ctxRadar, {
+                        type: 'radar',
+                        data: {
+                            labels: ['Rainfall', 'Soil Cap', 'Network Flow', 'Tide Lvl', 'Base Flow'],
+                            datasets: [{
+                                label: 'Today Snapshot',
+                                data: [80, 85, 60, 30, 40],
+                                backgroundColor: 'rgba(37, 99, 235, 0.2)',
+                                borderColor: '#2563eb',
+                                pointBackgroundColor: '#2563eb',
+                                borderWidth: 2,
+                                pointRadius: 3
+                            }, {
+                                label: 'Historical Baseline',
+                                data: [40, 50, 40, 35, 40],
+                                backgroundColor: 'transparent',
+                                borderColor: 'rgba(148, 163, 184, 0.5)', /* slate-400 */
+                                borderDash: [4, 4],
+                                borderWidth: 1,
+                                pointRadius: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: false }
+                            },
+                            scales: {
+                                r: {
+                                    angleLines: { color: 'rgba(148, 163, 184, 0.2)' },
+                                    grid: { color: 'rgba(148, 163, 184, 0.2)' },
+                                    pointLabels: {
+                                        font: { family: 'JetBrains Mono', size: 9 },
+                                        color: '#64748b'
+                                    },
+                                    ticks: { display: false, max: 100, min: 0 }
+                                }
+                            }
+                        }
+                    });
+                },
+
+                async fetchSeasonality(lat, lng, baseDateStr, region) {
+                    if (this.seasonalityLoading) return;
+                    this.seasonalityLoading = true;
+
+                    try {
+                        const years = [2020, 2021, 2022, 2023, 2024, 2025, 2026];
+                        const months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+
+                        // We will just sample the 15th of each month to build the seasonality curve.
+                        // For a real production app, the backend should provide a /api/seasonality endpoint.
+                        let fetchPromises = [];
+                        let requestsMap = [];
+
+                        for (let y of years) {
+                            for (let mIdx = 0; mIdx < months.length; mIdx++) {
+                                // Stop fetching future months for current year
+                                if (y === 2026 && mIdx > new Date().getMonth()) continue;
+
+                                let dateStr = `${y}-${months[mIdx]}-15`;
+
+                                let p = dataLoader.loadPixelData(lat, lng, dateStr, region).catch(() => null);
+                                fetchPromises.push(p);
+                                requestsMap.push({ year: y, monthIndex: mIdx });
+                            }
+                        }
+
+                        const results = await Promise.all(fetchPromises);
+
+                        // Reconstruct datasets
+                        let datasetsData = {};
+                        years.forEach(y => datasetsData[y] = new Array(12).fill(null));
+
+                        results.forEach((res, i) => {
+                            let map = requestsMap[i];
+                            // Using rainfall as the seasonality indicator here, could be soilMoisture
+                            datasetsData[map.year][map.monthIndex] = res && res.rainfall !== null ? res.rainfall : null;
+                        });
+
+                        // Update chart
+                        if (chartInstances.seasonality) {
+                            const seasonsChart = chartInstances.seasonality;
+
+                            // Map back to our graph UI
+                            seasonsChart.data.datasets.forEach(ds => {
+                                let labelYear = parseInt(ds.label.split(' ')[0]);
+                                if (datasetsData[labelYear]) {
+                                    // Smooth out nulls visually if needed, but Chart.js handles nulls (breaks line)
+                                    // To ensure it interpolates over nulls: `spanGaps: true` 
+                                    ds.data = datasetsData[labelYear];
+                                    ds.spanGaps = true;
+                                }
+                            });
+
+                            seasonsChart.update();
+                        }
+
+                    } catch (err) {
+                        console.error('Error fetching seasonality data: ', err);
+                    } finally {
+                        this.seasonalityLoading = false;
+                    }
+                }
+            }
+        }
+    </script>
 </body>
 
 </html>

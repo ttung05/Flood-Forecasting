@@ -213,12 +213,12 @@ function initManualInputEvents() {
         const parsedDate = parseManualDate(value);
         if (!parsedDate) return showDateError(input, errorMsg, 'Định dạng không hợp lệ. Sử dụng: DD/MM/YYYY');
 
-        const minDate = new Date('2000-01-01');
+        const minDate = new Date('2020-01-01');
         const maxDate = new Date();
         maxDate.setDate(maxDate.getDate() + 7);
 
         if (parsedDate < minDate || parsedDate > maxDate) {
-            return showDateError(input, errorMsg, 'Ngày phải từ 01/01/2000 đến 7 ngày tới');
+            return showDateError(input, errorMsg, 'Ngày phải từ 01/01/2020 đến 7 ngày tới');
         }
 
         const dateStr = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}-${String(parsedDate.getDate()).padStart(2, '0')}`;
@@ -275,7 +275,7 @@ function showDateError(input, errorMsg, message) {
 // ─────────────────────────────────────────────────────────
 async function selectUnifiedDate(dateStr) {
     selectedCalendarDate = dateStr;
-    const currentRegion = window.currentRegion || 'DBSCL';
+    const currentRegion = window.currentRegion || 'DaNang';
 
     // Update Top Display UI
     const displayBtn = document.getElementById('open-calendar-btn');

@@ -25,7 +25,7 @@ async function initTimeline() {
         if (data.dates && data.dates.length > 0) {
             timelineDates = data.dates;
         } else {
-            timelineDates = generateDateRange(data.dateRange?.start || '2000-01-01', data.dateRange?.end || new Date().toISOString().split('T')[0]);
+            timelineDates = generateDateRange(data.dateRange?.start || '2020-01-01', data.dateRange?.end || new Date().toISOString().split('T')[0]);
         }
 
         slider.max = timelineDates.length - 1;
@@ -68,7 +68,7 @@ function generateDateRange(startStr, endStr) {
 function handleTimelineSlider(e) {
     currentDateIndex = parseInt(e.target.value);
     updateTimelineCurrentDateUI();
-    const region = window.currentRegion || 'DBSCL';
+    const region = window.currentRegion || 'DaNang';
     if (typeof updateHeatmap === 'function') updateHeatmap(timelineDates[currentDateIndex], region);
 }
 
@@ -84,7 +84,7 @@ function toggleTimelinePlay() {
             const slider = document.getElementById('timeline-slider');
             if (slider) slider.value = currentDateIndex;
             updateTimelineCurrentDateUI();
-            if (typeof updateHeatmap === 'function') updateHeatmap(timelineDates[currentDateIndex], window.currentRegion || 'DBSCL');
+            if (typeof updateHeatmap === 'function') updateHeatmap(timelineDates[currentDateIndex], window.currentRegion || 'DaNang');
         }, 2000);
     } else {
         btn.textContent = '▶ Play';
@@ -128,7 +128,7 @@ async function initDetailChartsPage() {
     const lat = urlParams.get('lat');
     const lng = urlParams.get('lng');
     const date = urlParams.get('date');
-    const region = urlParams.get('region') || 'DBSCL';
+    const region = urlParams.get('region') || 'DaNang';
 
     if (!lat || !lng || !date) {
         window.location.href = '/';

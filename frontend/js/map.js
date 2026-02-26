@@ -4,13 +4,23 @@
 let map;
 let heatmapLayer;
 let boundingBoxes = [];
-let floodMaskLayer = null;   // L.LayerGroup chứa các rectangle flood
 let rainHeatLayer = null;   // L.heatLayer cho rainfall (tuỳ chọn)
 let isUpdating = false;     // Lock để ngăn race condition
 
 let currentDate = '2023-01-08'; // Date in seed data (step=7 days from 2020-01-01)
-let currentRegion = 'DBSCL';
+let currentRegion = 'DaNang';
 let vietnamBoundary = null; // Polygon biên giới VN để mask vùng ngập
+
+// ============================================================
+// REGION BOUNDS - khai báo sớm để getRegion() có thể dùng ngay
+// ============================================================
+const REGION_BOUNDS = {
+    DaNang: {
+        north: 16.25, south: 15.95,
+        east: 108.40, west: 107.90,
+        rows: 20, cols: 20
+    }
+};
 
 // ============================================================
 // LAYER MANAGER (Config & UI Checkbox Toggles)
@@ -18,7 +28,7 @@ let vietnamBoundary = null; // Polygon biên giới VN để mask vùng ngập
 const LayerManager = window.LayerManager = {
     // Configuration: Mapping UI Checkbox IDs to API Layer Names
     config: {
-        'cb-flood': { layer: 'flood', name: 'Flood Risk', type: 'grid', color: '#FF1744' },
+        'cb-flood': { layer: 'label', name: 'Flood Risk', type: 'grid', color: '#FF1744' },
         'cb-rain': { layer: 'rain', name: 'Rainfall', type: 'heatmap', color: '#2196F3' },
         'cb-moisture': { layer: 'soilMoisture', name: 'Soil Moisture', type: 'heatmap', color: '#795548' },
         'cb-dem': { layer: 'static', name: 'DEM', type: 'image', color: '#9E9E9E' }
@@ -54,7 +64,7 @@ const LayerManager = window.LayerManager = {
             if (payload && payload.layers) {
                 this.availability = payload.layers;
                 if (payload.hasAnyData) {
-                    const standardLayers = ['flood', 'rain', 'soilMoisture', 'static'];
+                    const standardLayers = ['label', 'rain', 'soilMoisture', 'static'];
                     standardLayers.forEach(layer => { this.availability[layer] = true; });
                 }
             } else {
@@ -105,16 +115,250 @@ document.addEventListener('DOMContentLoaded', () => { setTimeout(() => { LayerMa
 
 // Pixel Parameters Panel logic removed to prefer only Map Popup
 
-// Handle map click
+// ============================================================
+// PERFORMANCE: AbortController + Throttle for map clicks
+// ============================================================
+let _pixelAbortController = null;
+let _lastClickTime = 0;
+const CLICK_THROTTLE_MS = 300;
+
+// Inference-ready: Cache last N pixel results to avoid duplicate API calls
+const _pixelResultCache = new Map();
+const PIXEL_RESULT_CACHE_MAX = 50;
+
+function getPixelCacheKey(lat, lng, date) {
+    return `${lat.toFixed(4)}_${lng.toFixed(4)}_${date}`;
+}
+
+// Client-side grid data cache (populated when /api/grid is loaded)
+let _cachedGridData = {}; // { 'label_DaNang_2026-01-31': { data, bounds, width, height } }
+
+/**
+ * Try to read pixel value from already-loaded grid data (0ms, no API call).
+ * Returns value or null if grid not cached.
+ */
+function readPixelFromCachedGrid(layer, region, date, lat, lng) {
+    const key = `${layer}_${region}_${date}`;
+    const grid = _cachedGridData[key];
+    if (!grid || !grid.data) return undefined; // undefined = not cached
+
+    const { bounds, width, height, data } = grid;
+    const col = Math.floor((lng - bounds.west) / (bounds.east - bounds.west) * width);
+    const row = Math.floor((bounds.north - lat) / (bounds.north - bounds.south) * height);
+
+    if (col < 0 || col >= width || row < 0 || row >= height) return null;
+    return data[row * width + col];
+}
+
+// ============================================================
+// FETCH WITH TIMEOUT - Prevent hanging when API is slow/down
+// ============================================================
+const PIXEL_FETCH_TIMEOUT_MS = 10000; // 10 seconds max
+
+function fetchWithTimeout(url, options = {}, timeoutMs = PIXEL_FETCH_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            if (options.signal) {
+                // Don't abort the original controller, create a timeout error
+            }
+            reject(new Error(`Request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        fetch(url, options)
+            .then(res => { clearTimeout(timer); resolve(res); })
+            .catch(err => { clearTimeout(timer); reject(err); });
+    });
+}
+
+// ============================================================
+// SAFE POPUP CONTENT BUILDER - Prevents template literal crashes
+// ============================================================
+function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
+    try {
+        const risk = data.floodRisk || 'LOW';
+        const riskColor = getRiskColor(risk);
+        const regionName = region === 'DaNang' ? 'Đà Nẵng' : (region === 'DBSCL' ? 'Đồng Bằng Sông Cửu Long' : region);
+
+        // Safe value formatters
+        const fmtVal = (v, unit, decimals) => {
+            if (v == null || v === undefined) return 'N/A';
+            const num = Number(v);
+            if (isNaN(num)) return 'N/A';
+            return decimals !== undefined ? num.toFixed(decimals) + unit : num + unit;
+        };
+        const soilPct = (v) => {
+            if (v == null || v === undefined) return 'N/A';
+            const num = Number(v);
+            if (isNaN(num)) return 'N/A';
+            return (num * 100).toFixed(1) + '%';
+        };
+
+        return `
+            <div class="flood-popup-card" style="font-family: Inter, sans-serif; min-width: 280px; max-width: 340px; color: #4b5563;">
+                <!-- Header -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 2px solid #f3f4f6; padding-bottom: 12px;">
+                    <strong style="font-size: 15px; color: #1e293b; font-weight: 700;">
+                        <span style="margin-right: 6px;">📍</span>Selected Area
+                    </strong>
+                    <span style="background: ${riskColor}; color: white; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px ${riskColor}40;">
+                        ${risk === 'HIGH' || risk === 'CRITICAL' ? '⚠ ' : ''}${risk}
+                    </span>
+                </div>
+
+                <!-- Meta -->
+                <div style="font-size: 13px; margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span style="color: #64748b;">Coordinates:</span>
+                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; color: #334155;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #f3f4f6;">
+                        <span style="color: #64748b;">Region:</span>
+                        <span style="font-weight: 600; color: #475569;">${regionName}</span>
+                    </div>
+                </div>
+
+                <!-- Environmental Data -->
+                <div style="font-size: 13px; line-height: 2;">
+                    <strong style="font-size: 12px; color: #1e293b; display: block; margin-bottom: 8px;">
+                        <span style="margin-right: 4px;">🌊</span>Environmental Data
+                    </strong>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">🌧 Rainfall (24h):</span>
+                        <span style="font-weight: 600; color: #1d4ed8;">${fmtVal(data.rainfall, ' mm')}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">⛰ DEM (Elevation):</span>
+                        <span style="font-weight: 600; color: #059669;">${fmtVal(data.dem, ' m')}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">📐 Slope:</span>
+                        <span style="font-weight: 600; color: #7e22ce;">${fmtVal(data.slope, '°')}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">💧 Soil Moisture:</span>
+                        <span style="font-weight: 600; color: #dc2626;">${soilPct(data.soilMoisture)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">🌊 Flow:</span>
+                        <span style="font-weight: 600; color: #0891b2;">${fmtVal(data.flow, ' m³/s')}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">🌿 Land Cover:</span>
+                        <span style="font-weight: 500; color: #475569;">${data.landCover != null ? data.landCover : 'N/A'}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span style="color: #64748b;">🌊 Tide:</span>
+                        <span style="font-weight: 500; color: #475569;">${fmtVal(data.tide, ' m')}</span>
+                    </div>
+
+                    <!-- Risk Bar -->
+                    <div style="margin: 12px 0; padding: 10px; background: ${riskColor}10; border-radius: 8px; border: 1px solid ${riskColor}30;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-size: 11px; font-weight: 600; color: ${riskColor};">Flood Risk Level</span>
+                            <span style="font-size: 12px; font-weight: 700; color: ${riskColor};">${risk}</span>
+                        </div>
+                        <div style="height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
+                            <div style="height: 100%; width: ${risk === 'LOW' ? '25' : risk === 'MEDIUM' ? '55' : risk === 'HIGH' ? '80' : risk === 'CRITICAL' ? '100' : '10'}%; background: ${riskColor}; border-radius: 3px; transition: width 0.5s ease;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 16px; padding-top: 8px; border-top: 1px solid #f3f4f6;">
+                        <span style="color: #64748b;">📅 Date:</span>
+                        <span style="font-weight: 500; color: #334155;">${date}</span>
+                    </div>
+                    
+                    <button onclick="window.location.href='/detail.html?lat=${lat}&lng=${lng}&date=${date}&region=${region}'" 
+                        style="width: 100%; background: linear-gradient(135deg, #1976d2, #1565c0); color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 2px 8px rgba(25,118,210,0.3);"
+                        onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(25,118,210,0.4)';" 
+                        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(25,118,210,0.3)';">
+                        <span class="material-icons" style="font-size: 16px;">assessment</span>
+                        View Detailed Dashboard
+                    </button>
+                </div>
+            </div>
+        `;
+    } catch (templateError) {
+        console.error('❌ Error building popup content:', templateError);
+        return `
+            <div style="font-family: Inter, sans-serif; padding: 12px; text-align: center; color: #64748b;">
+                <p style="font-weight: 600; margin: 0 0 4px;">Selected Area</p>
+                <p style="font-size: 12px; margin: 0;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</p>
+                <p style="font-size: 11px; color: #94a3b8; margin: 4px 0 0;">Data display error. <a href="/detail.html?lat=${lat}&lng=${lng}&date=${date}&region=${region}" style="color: #1976d2;">View Details</a></p>
+            </div>
+        `;
+    }
+}
+
+// ============================================================
+// LOADING POPUP CONTENT - Shows immediately on click
+// ============================================================
+function buildLoadingPopupContent(lat, lng) {
+    return `
+        <div class="flood-popup-card" style="font-family: Inter, sans-serif; min-width: 260px; max-width: 320px; color: #4b5563; padding: 8px 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <strong style="font-size: 15px; color: #1e293b; font-weight: 700;">
+                    <span style="margin-right: 6px;">📍</span>Selected Area
+                </strong>
+                <span style="background: #e2e8f0; color: #64748b; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 6px;">LOADING</span>
+            </div>
+            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 12px;">
+                ${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E
+            </div>
+            <!-- Skeleton Loading -->
+            <div style="space-y: 8px;">
+                <div style="height: 14px; background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; margin-bottom: 8px;"></div>
+                <div style="height: 14px; background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; margin-bottom: 8px; width: 80%;"></div>
+                <div style="height: 14px; background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; margin-bottom: 8px; width: 60%;"></div>
+                <div style="height: 14px; background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; width: 90%;"></div>
+            </div>
+            <div style="text-align: center; margin-top: 16px; font-size: 12px; color: #94a3b8;">
+                <span style="display: inline-block; animation: spin 1s linear infinite; font-size: 16px;">⏳</span>
+                Fetching environmental data...
+            </div>
+        </div>
+    `;
+}
+
+// Handle map click (with throttle + abort + loading state + timeout)
 async function handleMapClick(e) {
+    console.log('🖱️ === MAP CLICK EVENT FIRED ===');
+    console.log('🖱️ Click coords:', e.latlng.lat.toFixed(4), e.latlng.lng.toFixed(4));
+    console.log('🖱️ currentDate:', currentDate, '| currentRegion:', currentRegion);
+    console.log('🖱️ API_BASE_URL:', JSON.stringify(window.API_BASE_URL));
+
+    // Throttle: skip if called too quickly
+    const now = Date.now();
+    if (now - _lastClickTime < CLICK_THROTTLE_MS) {
+        console.log('⏳ Click throttled');
+        return;
+    }
+    _lastClickTime = now;
+
+    // Abort previous in-flight request
+    if (_pixelAbortController) {
+        _pixelAbortController.abort();
+    }
+    _pixelAbortController = new AbortController();
     const { lat, lng } = e.latlng;
 
     // Check if click is in data region
     const region = getRegion(lat, lng);
 
-    // DEBUG: Alert if click outside
     if (!region) {
-        console.log('Click outside data regions');
+        // Vẫn hiện popup thông báo nếu click ngoài vùng dữ liệu
+        console.log('⚠️ Click outside data regions');
+        L.popup({ className: 'flood-popup', maxWidth: 340, autoPan: true, autoPanPadding: [40, 40] })
+            .setLatLng(e.latlng)
+            .setContent(`
+                <div style="font-family: Inter, sans-serif; padding: 8px; text-align: center; color: #64748b;">
+                    <span style="font-size: 32px; display: block; margin-bottom: 8px;">🚫</span>
+                    <p style="margin: 4px 0 0; font-weight: 700; font-size: 14px; color: #334155;">No Data Available</p>
+                    <p style="margin: 6px 0 0; font-size: 12px; line-height: 1.5;">This location is outside the data coverage area.<br/>Currently supported: <strong>Đà Nẵng</strong></p>
+                    <p style="margin: 8px 0 0; font-size: 11px; color: #94a3b8;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</p>
+                </div>
+            `)
+            .openOn(map);
         return;
     }
 
@@ -124,108 +368,118 @@ async function handleMapClick(e) {
     if (region !== currentRegion) {
         console.log(`🔄 Switching region from ${currentRegion} to ${region}`);
         currentRegion = region;
-
-        // Show loading indicator or toast if available (optional)
-        // Refresh visuals for the new region
         if (typeof updateHeatmap === 'function') {
-            updateHeatmap(currentDate, currentRegion, true); // Force update
+            updateHeatmap(currentDate, currentRegion, true);
         }
     }
 
-    try {
-        // Fetch pixel data – API returns envelope { success, data, error }
-        const url = `${window.API_BASE_URL}/api/pixel/${lat}/${lng}/${currentDate}/${region}`;
+    // ====== STEP 1: Show loading popup IMMEDIATELY ======
+    const loadingPopup = L.popup({ className: 'flood-popup', maxWidth: 360, minWidth: 280, autoPan: true, autoPanPadding: [40, 40] })
+        .setLatLng(e.latlng)
+        .setContent(buildLoadingPopupContent(lat, lng))
+        .openOn(map);
 
-        const response = await fetch(url);
-        const envelope = await response.json();
+    console.log('💬 Loading popup shown');
+
+    try {
+        // ====== STEP 2: Fetch pixel data WITH TIMEOUT ======
+        const url = `${window.API_BASE_URL || ''}/api/pixel/${lat}/${lng}/${currentDate}/${region}`;
+        console.log('🔗 Fetching URL:', url);
+        const t0 = performance.now();
+
+        const response = await fetchWithTimeout(url, { signal: _pixelAbortController.signal }, PIXEL_FETCH_TIMEOUT_MS);
+        console.log('📨 Response status:', response.status);
+
+        let envelope;
+        try {
+            envelope = await response.json();
+        } catch (jsonError) {
+            console.error('❌ Failed to parse API response as JSON:', jsonError);
+            envelope = { success: false, error: { message: `Server returned invalid response (HTTP ${response.status})` } };
+        }
+
         let data;
+        const elapsed = (performance.now() - t0).toFixed(0);
 
         if (!envelope.success) {
             console.warn(`⚠️ API Error: ${envelope.error?.message || response.status}`);
             data = { floodRisk: 'NO DATA', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
         } else {
             data = envelope.data;
-            console.log('Pixel data:', data);
+            console.log(`✅ Pixel data fetched in ${elapsed}ms (server: ${data.metadata?.responseTimeMs || '?'}ms)`);
         }
 
-        // Show popup
-        L.popup()
-            .setLatLng(e.latlng)
-            .setContent(`
-                <div style="font-family: Inter, sans-serif; min-width: 240px; max-width: 300px;">
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">
-                        <strong style="font-size: 14px; color: #1F2937;">Selected Area</strong>
-                        <span style="background: ${getRiskColor(data.floodRisk)}; color: white; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 4px;">
-                            ${data.floodRisk || 'LOW'}
-                        </span>
-                    </div>
-                    <div style="font-size: 12px; line-height: 1.8;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #64748b;">Coordinates:</span>
-                            <span style="font-family: monospace; font-weight: 500; font-size: 11px;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</span>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: #64748b;">Region:</span>
-                            <span style="font-weight: 500;">${region === 'DBSCL' ? 'Đồng Bằng Sông Cửu Long' : 'Duyên Hải Miền Trung'}</span>
-                        </div>
-                        <div style="border-top: 1px solid #e5e7eb; margin: 8px 0; padding-top: 8px;">
-                            <strong style="font-size: 11px; color: #1F2937; display: block; margin-bottom: 6px;">Environmental Data</strong>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">Rainfall (24h):</span>
-                                <span style="font-weight: 600; color: #1976d2;">${data.rainfall != null ? data.rainfall + ' mm' : 'N/A'}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">DEM (Elevation):</span>
-                                <span style="font-weight: 600; color: #059669;">${data.dem != null ? data.dem + ' m' : 'N/A'}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">Slope:</span>
-                                <span style="font-weight: 600; color: #7C3AED;">${data.slope != null ? data.slope + '°' : 'N/A'}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">Soil Moisture:</span>
-                                <span style="font-weight: 600; color: #DC2626;">${data.soilMoisture != null ? data.soilMoisture + '%' : 'N/A'}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">Flow:</span>
-                                <span style="font-weight: 600; color: #0891B2;">${data.flow != null ? data.flow + ' m³/s' : 'N/A'}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                                <span style="color: #64748b;">Land Cover:</span>
-                                <span style="font-weight: 500; font-size: 11px;">${data.landCover !== null ? data.landCover : 'N/A'}</span>
-                            </div>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; border-top: 1px solid #e5e7eb; padding-top: 6px; margin-top: 6px;">
-                            <span style="color: #64748b;">Date:</span>
-                            <span style="font-weight: 500;">${currentDate}</span>
-                        </div>
-                        <button onclick="window.location.href='/detail.html?lat=${lat}&lng=${lng}&date=${currentDate}&region=${region}'" 
-                            style="width: 100%; margin-top: 10px; background: #1976d2; color: white; border: none; padding: 8px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; transition: background 0.2s;"
-                            onmouseover="this.style.background='#1565c0'" onmouseout="this.style.background='#1976d2'">
-                            <span class="material-icons" style="font-size: 16px;">analytics</span>
-                            View Detailed Dashboard
-                        </button>
-                    </div>
-                </div>
-            `)
-            .openOn(map);
+        // ====== STEP 3: Update popup with real data (smooth transition) ======
+        const popupContent = buildSelectedAreaPopupContent(data, lat, lng, region, currentDate);
+
+        // Always try to update or re-open the popup
+        try {
+            if (loadingPopup && loadingPopup.isOpen && loadingPopup.isOpen()) {
+                loadingPopup.setContent(popupContent);
+                loadingPopup.update();
+                console.log('✅ Popup updated with pixel data');
+            } else {
+                // Re-open popup if user closed loading state or popup was lost
+                L.popup({ className: 'flood-popup', maxWidth: 360, minWidth: 280, autoPan: true, autoPanPadding: [40, 40] })
+                    .setLatLng(e.latlng)
+                    .setContent(popupContent)
+                    .openOn(map);
+                console.log('✅ Popup re-opened with pixel data');
+            }
+        } catch (popupErr) {
+            console.warn('⚠️ Failed to update popup, opening new one:', popupErr);
+            L.popup({ className: 'flood-popup', maxWidth: 360, minWidth: 280, autoPan: true, autoPanPadding: [40, 40] })
+                .setLatLng(e.latlng)
+                .setContent(popupContent)
+                .openOn(map);
+        }
 
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.log('🔄 Previous click aborted (newer click in progress)');
+            return;
+        }
         console.error('❌ Error fetching pixel data:', error);
+
+        const isTimeout = error.message && error.message.includes('timed out');
+        const errorContent = `
+            <div style="font-family: Inter, sans-serif; padding: 12px; text-align: center; color: #dc2626; min-width: 240px;">
+                <span style="font-size: 32px; display: block; margin-bottom: 8px;">${isTimeout ? '⏱️' : '⚠️'}</span>
+                <p style="margin: 4px 0 0; font-weight: 700; font-size: 14px; color: #334155;">${isTimeout ? 'Request Timed Out' : 'Error Loading Data'}</p>
+                <p style="margin: 6px 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">${isTimeout ? 'The server took too long to respond.<br/>Please try again.' : (error.message || 'Network error')}</p>
+                <p style="margin: 8px 0 0; font-size: 11px; color: #94a3b8;">${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E</p>
+                <button onclick="handleMapClick({latlng: {lat: ${lat}, lng: ${lng}}})" 
+                    style="margin-top: 12px; padding: 8px 20px; background: #1976d2; color: white; border: none; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; transition: background 0.2s;"
+                    onmouseover="this.style.background='#1565c0'" onmouseout="this.style.background='#1976d2'">
+                    🔄 Retry
+                </button>
+            </div>
+        `;
+
+        // Try to update existing popup, otherwise create new
+        try {
+            if (loadingPopup && loadingPopup.isOpen && loadingPopup.isOpen()) {
+                loadingPopup.setContent(errorContent);
+            } else {
+                L.popup({ className: 'flood-popup', maxWidth: 360, autoPan: true })
+                    .setLatLng(e.latlng)
+                    .setContent(errorContent)
+                    .openOn(map);
+            }
+        } catch (popupErr) {
+            L.popup({ className: 'flood-popup', maxWidth: 360, autoPan: true })
+                .setLatLng(e.latlng)
+                .setContent(errorContent)
+                .openOn(map);
+        }
     }
 }
 
 // Get region from coordinates
 function getRegion(lat, lng) {
-    // Check Central Coast
-    const cc = REGION_BOUNDS.CentralCoast;
-    if (lat <= cc.north && lat >= cc.south && lng <= cc.east && lng >= cc.west) {
-        return 'CentralCoast';
-    }
-    // Check DBSCL
-    const db = REGION_BOUNDS.DBSCL;
+    const db = REGION_BOUNDS.DaNang;
     if (lat <= db.north && lat >= db.south && lng <= db.east && lng >= db.west) {
-        return 'DBSCL';
+        return 'DaNang';
     }
     return null;
 }
@@ -246,74 +500,86 @@ function getRiskColor(risk) {
 // ============================================================
 
 // Bounds của từng region - PHAI khop voi seed_sample_data.py va server/api.js
-const REGION_BOUNDS = {
-    DBSCL: {
-        north: 11.0, south: 8.5,
-        east: 107.0, west: 104.0,
-        rows: 25, cols: 30
-    },
-    CentralCoast: {
-        north: 16.5, south: 14.5,
-        east: 109.5, west: 107.5,
-        rows: 20, cols: 20
-    }
-};
 
 
 /**
  * Xoá toàn bộ flood mask layer cũ khỏi bản đồ
  */
 /**
- * Render an image mask overlay on the Leaflet map.
- * Replaces the old grid and heatmap DOM element loops.
- * 
- * @param {Object} data - API response with { maskUrl: '/masks/...', bounds: {north, south, east, west} }
+ * Render Grid GeoTIFF layer on map
  */
-function renderImageMask(data) {
-    console.log(`🖼️ renderImageMask called for URL: ${data.maskUrl}`, data.bounds);
+async function renderGridLayer(date, region, layerName) {
+    try {
+        const url = `${window.API_BASE_URL || ''}/api/grid/${region}/${date}/${layerName}`;
+        const response = await fetch(url);
+        const envelope = await response.json();
 
-    if (!data || !data.maskUrl) {
-        console.log('ℹ️ No mask URL provided');
-        return;
+        if (!envelope.success) {
+            console.warn(`⚠️ Grid data not available for ${layerName} in ${region} on ${date}`);
+            return;
+        }
+
+        const grid = envelope.data;
+        const { width, height, bounds, data } = grid;
+
+        const latStep = (bounds.north - bounds.south) / height;
+        const lngStep = (bounds.east - bounds.west) / width;
+
+        const layerGroup = L.layerGroup();
+
+        for (let row = 0; row < height; row++) {
+            for (let col = 0; col < width; col++) {
+                const index = row * width + col;
+                const val = data[index];
+
+                let fillColor = null;
+                let fillOpacity = 0.5;
+
+                if (val === null) {
+                    // Mây che / Không có dữ liệu
+                    fillColor = '#cfd8dc'; // Xám nhạt hơn một chút để đỡ rối mắt
+                    fillOpacity = 0.3;     // Mờ hơn một chút
+                } else if (val > 0) {
+                    // Có ngập
+                    fillColor = '#ef4444'; // Đỏ nhạt
+                    fillOpacity = 0.5;
+                } else {
+                    // val === 0 hoặc nhỏ hơn 0 thì bỏ qua (Không ngập)
+                    continue;
+                }
+
+                const cellNorth = bounds.north - (row * latStep);
+                const cellSouth = cellNorth - latStep;
+                const cellWest = bounds.west + (col * lngStep);
+                const cellEast = cellWest + lngStep;
+
+                const rect = L.rectangle(
+                    [[cellSouth, cellWest], [cellNorth, cellEast]],
+                    {
+                        color: fillColor, // border color same as fill
+                        weight: 0,        // No border
+                        fillColor: fillColor,
+                        fillOpacity: fillOpacity,
+                        interactive: false // Không bắt click (để map ở dưới bắt click)
+                    }
+                );
+                layerGroup.addLayer(rect);
+            }
+        }
+
+        layerGroup.addTo(map);
+        window.activeHeatLayers = window.activeHeatLayers || [];
+        window.activeHeatLayers.push(layerGroup);
+
+    } catch (e) {
+        console.error(`❌ Error rendering grid layer ${layerName}:`, e);
     }
-
-    if (!floodMaskLayer) {
-        floodMaskLayer = L.layerGroup();
-        floodMaskLayer.addTo(map);
-    }
-
-    // Convert API bounds to Leaflet LatLngBounds
-    // API Returns: { north: 10.5, south: 8.0, east: 106.39, west: 104.0 }
-    // Leaflet Expects: [[south, west], [north, east]]
-    const imageBounds = [
-        [data.bounds.south, data.bounds.west],
-        [data.bounds.north, data.bounds.east]
-    ];
-
-    // Mount the image overlay onto the map
-    // maskUrl có thể là R2 public URL (https://...) hoặc local path (/masks/...)
-    const fullUrl = data.maskUrl.startsWith('http')
-        ? data.maskUrl
-        : window.API_BASE_URL + data.maskUrl;
-
-    const overlay = L.imageOverlay(fullUrl, imageBounds, {
-        opacity: 0.8, // Slightly transparent
-        interactive: false // Let click events pass through to map
-    });
-
-    floodMaskLayer.addLayer(overlay);
-    console.log(`✅ ImageMask mounted: ${fullUrl}`);
 }
 
 /**
- * Clear all visualize layers (flood mask + heatmaps)
+ * Clear all visualize layers (heatmaps)
  */
 function clearLayers() {
-    // Clear Flood Mask
-    if (floodMaskLayer) {
-        map.removeLayer(floodMaskLayer);
-        floodMaskLayer = null;
-    }
     // Clear Legacy Heatmap
     if (heatmapLayer) {
         map.removeLayer(heatmapLayer);
@@ -330,7 +596,7 @@ function clearLayers() {
  * Cập nhật hiển thị dựa trên date/region và LayerManager
  * Renders BOTH regions simultaneously for complete coverage
  * @param {string} date YYYY-MM-DD
- * @param {string} region DBSCL | CentralCoast (primary region for LayerManager)
+ * @param {string} region DaNang (primary region for LayerManager)
  * @param {boolean} force Force update even if locked (used by toggles)
  */
 async function updateHeatmap(date, region, force = false) {
@@ -364,12 +630,14 @@ async function updateHeatmap(date, region, force = false) {
         console.log('📋 Active Layers:', activeLayers);
 
         if (activeLayers.length === 0) {
-            console.warn('⚠️ No active layers! Forcing "flood" layer for debugging.');
-            activeLayers = [{ layer: 'flood', type: 'grid' }];
+            console.warn('⚠️ No active layers! Forcing "label" layer for debugging.');
+            activeLayers = [{ layer: 'label', type: 'grid' }];
         }
 
         // 4. Render ALL regions simultaneously
-        const allRegions = ['DBSCL', 'CentralCoast'];
+        const allRegions = ['DaNang'];
+
+        const showFlood = activeLayers.some(l => l.layer === 'label');
 
         await Promise.all(allRegions.map(async (regionName) => {
             const bounds = REGION_BOUNDS[regionName];
@@ -378,30 +646,9 @@ async function updateHeatmap(date, region, force = false) {
             // Always draw bounds for the region (static frame)
             drawDataBounds(bounds);
 
-            // For each active layer, fetch and render
-            await Promise.all(activeLayers.map(async (conf) => {
-                const url = `${window.API_BASE_URL}/api/heatmap/${regionName}/${date}/${conf.layer}`;
-                console.log(`🌐 Fetching: ${url}`);
-
-                try {
-                    const res = await fetch(url);
-                    const envelope = await res.json();
-
-                    // API returns { success, data, error }
-                    if (!envelope.success) {
-                        console.log(`ℹ️ No ${conf.layer} mask for ${regionName} on ${date}: ${envelope.error?.message}`);
-                        return;
-                    }
-                    const data = envelope.data;
-                    console.log(`📦 Heatmap received for ${regionName} ${conf.layer}`);
-
-                    if (data.maskUrl) {
-                        renderImageMask(data);
-                    }
-                } catch (e) {
-                    console.log(`ℹ️ No ${conf.layer} mask available for ${regionName} on ${date}`);
-                }
-            }));
+            if (showFlood) {
+                await renderGridLayer(date, regionName, 'label');
+            }
         }));
 
     } catch (err) {
@@ -445,7 +692,7 @@ function initMap() {
         zoomControl: false,
         attributionControl: false,
         layers: [osm] // Default: OpenStreetMap (Detailed)
-    }).setView([10.0, 105.5], 8);
+    }).setView([16.1, 108.15], 11);
 
     // --- Add Base Layer Control ---
     const baseMaps = {
@@ -473,21 +720,20 @@ function initMap() {
     // --- Tự động lấy ngày đầu tiên có trong DB ---
     (async () => {
         try {
-            const r = await fetch(`${window.API_BASE_URL}/api/dates/DBSCL`);
+            const r = await fetch(`${window.API_BASE_URL}/api/dates/DaNang`);
             const env = await r.json();
             if (env.success && env.data?.availableDates) {
-                // Lấy ngày nhỏ nhất từ availableDates
+                // Lấy ngày lớn nhất từ availableDates thay vì nhỏ nhất
                 const years = Object.keys(env.data.availableDates).sort();
                 if (years.length > 0) {
-                    const y = years[0];
+                    const y = years[years.length - 1];
                     const months = Object.keys(env.data.availableDates[y]).sort();
                     if (months.length > 0) {
-                        const m = months[0];
-                        const days = env.data.availableDates[y][m].sort((a, b) => a - b);
-                        if (days.length > 0) {
-                            const d = String(days[0]).padStart(2, '0');
-                            const mo = String(m).padStart(2, '0');
-                            currentDate = `${y}-${mo}-${d}`;
+                        const m = months[months.length - 1];
+                        const dDays = env.data.availableDates[y][m].sort((a, b) => a - b);
+                        if (dDays.length > 0) {
+                            const d = dDays[dDays.length - 1];
+                            currentDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                             console.log('📅 Auto-set currentDate from DB:', currentDate);
                         }
                     }
@@ -575,18 +821,12 @@ function isPointInVietnam(pt) {
 function drawDataBounds(bounds) {
     if (!bounds) return;
 
-    if (!floodMaskLayer) {
-        floodMaskLayer = L.layerGroup();
-        floodMaskLayer.addTo(map);
-    }
-
-    // Simple visual indicator for data coverage
-    // Can be called multiple times (one per region), but floodMaskLayer is cleared on update
-
+    // We can draw a bounds box if needed using standard Leaflet rect
+    // But since no mask layer is used, we just draw directly if needed.
     const boundsRect = L.rectangle(
         [[bounds.south, bounds.west], [bounds.north, bounds.east]],
         { color: '#2196F3', weight: 1, fill: false, dashArray: '5, 5', interactive: false }
     );
-    floodMaskLayer.addLayer(boundsRect);
+    boundsRect.addTo(map);
     console.log('🟦 Added data bounding box for region');
 }

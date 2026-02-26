@@ -3,7 +3,6 @@
  *
  * Architecture:
  *   - Data SOURCE:     GeoTIFF files in Cloudflare R2 (original .tif)
- *   - Heatmap overlay: Pre-rendered PNG masks in R2 (processed-masks/)
  *   - Pixel lookup:    Download TIF on-demand and read pixel via geotiff
  *   - Cache:           In-process LRU (R2 listing + pixel results)
  *
@@ -11,10 +10,6 @@
  *   FloodData/{region}/Daily/Rain/Rain_YYYY_MM_DD.tif
  *   FloodData/{region}/LabelDaily/Flood/Flood_YYYY_MM_DD.tif
  *   FloodData/{region}/Static/DEM/DEM.tif
- *
- * R2 Folder structure (PNG output from process_and_upload.py):
- *   processed-masks/{region}/Daily/Rain/Rain_YYYY_MM_DD.png
- *   processed-masks/{region}/LabelDaily/Flood/Flood_YYYY_MM_DD.png
  */
 
 const express = require('express');
@@ -61,29 +56,27 @@ function fail(res, message, status = 500, code = null) {
 // ──────────────────────────────────────────────────────────────
 // VALIDATION
 // ──────────────────────────────────────────────────────────────
-const VALID_REGIONS = ['DBSCL', 'CentralCoast'];
-const VALID_LAYERS = ['rain', 'soilMoisture', 'tide', 'flood'];
+const VALID_REGIONS = ['DaNang'];
+const VALID_LAYERS = ['rain', 'soilMoisture', 'tide', 'label'];
 
-// Layer folder mapping: API name → R2 folder path segment
 const LAYER_FOLDER_MAP = {
-    rain: { sub: 'Daily', folder: 'Rain', prefix: 'Rain' },
-    soilMoisture: { sub: 'Daily', folder: 'SoilMoisture', prefix: 'SoilMoisture' },
-    tide: { sub: 'Daily', folder: 'Tide', prefix: 'Tide' },
-    flood: { sub: 'LabelDaily', folder: 'Flood', prefix: 'Flood' },
+    rain: { sub: 'Daily', folder: 'Rain', prefix: 'Rain', scale: 1000 },
+    soilMoisture: { sub: 'Daily', folder: 'SoilMoisture', prefix: 'SoilMoisture', scale: 1000 },
+    tide: { sub: 'Daily', folder: 'Tide', prefix: 'Tide', scale: 1000 },
+    label: { sub: 'LabelDaily', folder: '', prefix: 'Flood', scale: 1000 },
+    dem: { sub: 'Static', prefix: 'DEM', isFlat: true, scale: 1 },
+    slope: { sub: 'Static', prefix: 'Slope', isFlat: true, scale: 1 },
+    flow: { sub: 'Static', prefix: 'Flow', isFlat: true, scale: 1 },
+    landCover: { sub: 'Static', prefix: 'LandCover', isFlat: true, scale: 1 },
 };
 
 // GeoTIFF bounds per region (must match actual TIF data)
 const REGION_BOUNDS = {
-    DBSCL: {
-        north: 11.0, south: 8.5,
-        east: 107.0, west: 104.0,
-        rows: 25, cols: 30
-    },
-    CentralCoast: {
-        north: 16.5, south: 14.5,
-        east: 109.5, west: 107.5,
+    DaNang: {
+        north: 16.25, south: 15.95,
+        east: 108.40, west: 107.90,
         rows: 20, cols: 20
-    },
+    }
 };
 
 function isValidRegion(r) { return VALID_REGIONS.includes(r); }
@@ -96,10 +89,17 @@ function isValidCoord(lat, lng) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// IN-PROCESS LRU CACHE
+// 2-TIER CACHE: tifImageCache (parsed TIF objects) + pixelCache (results)
 // ──────────────────────────────────────────────────────────────
+
+// Tier 1: Parsed GeoTIFF Image objects (避免重复下载+解码)
+const _tifImageCache = new Map();
+const TIF_CACHE_MAX = 30;
+const TIF_CACHE_TTL = 60 * 60 * 1000; // 60 minutes
+
+// Tier 2: Pixel/Grid results
 const _cache = new Map();
-const CACHE_MAX = 100;
+const CACHE_MAX = 200;
 const CACHE_TTL = 90 * 60 * 1000; // 90 minutes
 
 function cacheGet(key) {
@@ -111,6 +111,31 @@ function cacheGet(key) {
 function cacheSet(key, value) {
     if (_cache.size >= CACHE_MAX) _cache.delete(_cache.keys().next().value);
     _cache.set(key, { v: value, ts: Date.now() });
+}
+
+// TIF Image cache helpers
+function tifCacheGet(key) {
+    const e = _tifImageCache.get(key);
+    if (!e) return null;
+    if (Date.now() - e.ts >= TIF_CACHE_TTL) { _tifImageCache.delete(key); return null; }
+    e.ts = Date.now(); // Refresh TTL on access
+    return e.v;
+}
+function tifCacheSet(key, value) {
+    if (_tifImageCache.size >= TIF_CACHE_MAX) _tifImageCache.delete(_tifImageCache.keys().next().value);
+    _tifImageCache.set(key, { v: value, ts: Date.now() });
+}
+
+// ──────────────────────────────────────────────────────────────
+// CONCURRENCY CONTROL (p-limit: max 5 simultaneous TIF decodes)
+// ──────────────────────────────────────────────────────────────
+let _limit;
+async function getLimit() {
+    if (!_limit) {
+        const pLimit = (await import('p-limit')).default;
+        _limit = pLimit(5);
+    }
+    return _limit;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -158,29 +183,14 @@ async function r2Exists(key) {
     } catch { return false; }
 }
 
-/**
- * Build the R2 key for a TIF file.
- * Pattern: FloodData/{region}/{sub}/{folder}/{prefix}_YYYY_MM_DD.tif
- */
 function tifKey(region, layerInfo, date) {
-    const [y, m, d] = date.split('-');
-    return `FloodData/${region}/${layerInfo.sub}/${layerInfo.folder}/${layerInfo.prefix}_${y}_${m}_${d}.tif`;
-}
-
-/**
- * Build the R2 key for a PNG mask file.
- * Pattern: processed-masks/{region}/{sub}/{folder}/{prefix}_YYYY_MM_DD.png
- */
-function pngKey(region, layerInfo, date) {
-    const [y, m, d] = date.split('-');
-    return `processed-masks/${region}/${layerInfo.sub}/${layerInfo.folder}/${layerInfo.prefix}_${y}_${m}_${d}.png`;
-}
-
-/**
- * Build the public URL for a PNG mask.
- */
-function maskPublicUrl(region, layerInfo, date) {
-    return `${R2_PUBLIC_URL}/${pngKey(region, layerInfo, date)}`;
+    if (layerInfo.isFlat) {
+        return `FloodData/${region}/${layerInfo.sub}/${layerInfo.prefix}.tif`;
+    }
+    if (layerInfo.folder) {
+        return `FloodData/${region}/${layerInfo.sub}/${layerInfo.folder}/${layerInfo.prefix}_${date}.tif`;
+    }
+    return `FloodData/${region}/${layerInfo.sub}/${layerInfo.prefix}_${date}.tif`;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -210,7 +220,7 @@ async function loadDateIndex(region) {
     const objects = await r2List(prefix);
 
     const dateSet = new Set();
-    const RE = /(\d{4})_(\d{2})_(\d{2})\.tif$/i;
+    const RE = /(\d{4})-(\d{2})-(\d{2})\.tif$/i;
 
     objects.forEach(obj => {
         const m = obj.Key.match(RE);
@@ -253,20 +263,84 @@ async function getGeoTIFF() {
 }
 
 /**
- * Read one pixel value from an R2-hosted GeoTIFF at (lat, lng).
- * Downloads the TIF to memory, then uses geotiff to read the pixel.
- * Returns { value, bounds: {north,south,east,west} } or null.
+ * Get or cache a parsed GeoTIFF Image object.
+ * This avoids re-downloading and re-parsing the same TIF file.
  */
-async function readPixelFromR2Tif(r2Key, lat, lng) {
+async function getCachedTifImage(r2Key) {
+    const cached = tifCacheGet(r2Key);
+    if (cached) return cached;
+
+    const limit = await getLimit();
+    return limit(async () => {
+        // Double-check after acquiring semaphore
+        const recheck = tifCacheGet(r2Key);
+        if (recheck) return recheck;
+
+        const buf = await r2GetBuffer(r2Key);
+        const GT = await getGeoTIFF();
+        const tiff = await GT.fromArrayBuffer(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        const img = await tiff.getImage();
+        tifCacheSet(r2Key, img);
+        return img;
+    });
+}
+
+/**
+ * Read the entire grid values from an R2-hosted GeoTIFF.
+ * Uses Tier-1 TIF Image cache to avoid redundant downloads.
+ */
+async function readGridFromR2Tif(r2Key, scale = 1) {
+    const cacheKey = `grid_${r2Key}`;
+    const cached = cacheGet(cacheKey);
+    if (cached !== null && cached !== undefined) return cached;
+
+    try {
+        const img = await getCachedTifImage(r2Key);
+
+        const [west, south, east, north] = img.getBoundingBox();
+        const width = img.getWidth();
+        const height = img.getHeight();
+
+        const [rasters] = await img.readRasters();
+        const nodata = img.fileDirectory.GDAL_NODATA;
+        const nod = nodata !== undefined ? parseFloat(nodata) : -9999;
+
+        const data = new Array(width * height);
+        for (let i = 0; i < rasters.length; i++) {
+            const rawValue = rasters[i];
+            if (rawValue === nod || rawValue === null || isNaN(rawValue) || rawValue <= -9998) {
+                data[i] = null;
+            } else {
+                data[i] = parseFloat((rawValue / scale).toFixed(4));
+            }
+        }
+
+        const result = {
+            data,
+            bounds: { north, south, east, west },
+            width,
+            height
+        };
+        cacheSet(cacheKey, result);
+        return result;
+    } catch (err) {
+        console.warn(`⚠️  readGridFromR2Tif(${r2Key}): ${err.message}`);
+        return null;
+    }
+}
+
+/**
+ * Read one pixel value from an R2-hosted GeoTIFF at (lat, lng).
+ * Uses Tier-1 TIF Image cache to avoid redundant downloads.
+ * Returns numeric value or null.
+ */
+async function readPixelFromR2Tif(r2Key, lat, lng, scale = 1) {
     const cacheKey = `pixel_${r2Key}_${lat.toFixed(4)}_${lng.toFixed(4)}`;
     const cached = cacheGet(cacheKey);
     if (cached !== null && cached !== undefined) return cached;
 
     try {
-        const buf = await r2GetBuffer(r2Key);
-        const GT = await getGeoTIFF();
-        const tiff = await GT.fromArrayBuffer(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-        const img = await tiff.getImage();
+        const img = await getCachedTifImage(r2Key);
 
         const [west, south, east, north] = img.getBoundingBox();
         const width = img.getWidth();
@@ -289,7 +363,7 @@ async function readPixelFromR2Tif(r2Key, lat, lng) {
 
         const value = (rawValue === nod || rawValue === null || isNaN(rawValue) || rawValue <= -9998)
             ? null
-            : parseFloat(rawValue.toFixed(4));
+            : parseFloat((rawValue / scale).toFixed(4));
 
         cacheSet(cacheKey, value);
         return value;
@@ -314,6 +388,7 @@ router.get('/dates/:region', async (req, res) => {
         if (!index)
             return fail(res, `No TIF data found for region "${region}" in R2`, 404, 'NOT_FOUND');
 
+        res.setHeader('Cache-Control', 'public, max-age=600, stale-while-revalidate=300');
         return ok(res, {
             region: index.region,
             dateRange: index.date_range,
@@ -329,13 +404,7 @@ router.get('/dates/:region', async (req, res) => {
 // ── GET /api/timeline ──────────────────────────────────────────
 router.get('/timeline', async (req, res) => {
     try {
-        const [dbsclResult, ccResult] = await Promise.allSettled([
-            loadDateIndex('DBSCL'),
-            loadDateIndex('CentralCoast'),
-        ]);
-
-        const dbscl = dbsclResult.status === 'fulfilled' ? dbsclResult.value : null;
-        const cc = ccResult.status === 'fulfilled' ? ccResult.value : null;
+        const dnResult = await loadDateIndex('DaNang');
 
         const allDates = new Set();
         function addDates(index) {
@@ -346,47 +415,25 @@ router.get('/timeline', async (req, res) => {
                 });
             });
         }
-        addDates(dbscl);
-        addDates(cc);
+        addDates(dnResult);
 
         const dates = Array.from(allDates).sort();
 
         return ok(res, {
             dates,
-            dateRange: { start: dates[0] || '2000-01-01', end: dates[dates.length - 1] || '' },
+            dateRange: { start: dates[0] || '2020-01-01', end: dates[dates.length - 1] || '' },
             totalDays: dates.length,
-            regions: { DBSCL: !!dbscl, CentralCoast: !!cc },
+            regions: { DaNang: !!dnResult },
         });
     } catch (err) {
         return fail(res, `Failed to load timeline: ${err.message}`);
     }
 });
 
-// ── GET /api/heatmap/:region/:date/:layer ─────────────────────
-// Returns PNG public URL + bounds (no computation needed)
-router.get('/heatmap/:region/:date/:layer', (req, res) => {
-    const { region, date, layer } = req.params;
-
-    if (!isValidRegion(region)) return fail(res, `Invalid region "${region}"`, 400, 'INVALID_REGION');
-    if (!isValidDate(date)) return fail(res, `Invalid date "${date}"`, 400, 'INVALID_DATE');
-
-    const layerInfo = LAYER_FOLDER_MAP[layer];
-    if (!layerInfo) return fail(res, `Invalid layer "${layer}". Valid: ${Object.keys(LAYER_FOLDER_MAP).join(', ')}`, 400, 'INVALID_LAYER');
-
-    const maskUrl = maskPublicUrl(region, layerInfo, date);
-
-    return ok(res, {
-        layer,
-        date,
-        region,
-        bounds: REGION_BOUNDS[region],
-        maskUrl,
-    });
-});
-
-// ── GET /api/pixel/:lat/:lng/:date/:region ────────────────────
+// ── GET /api/pixel/:lat/:lng/:date/:region ─────────────────────
 // Read pixel value from GeoTIFF in R2 for all layers
 router.get('/pixel/:lat/:lng/:date/:region', async (req, res) => {
+    const t0 = Date.now();
     const { region, date } = req.params;
     const lat = parseFloat(req.params.lat);
     const lng = parseFloat(req.params.lng);
@@ -401,12 +448,16 @@ router.get('/pixel/:lat/:lng/:date/:region', async (req, res) => {
     }
 
     try {
-        // Read all daily layers in parallel
-        const [rainfall, soilMoisture, tide, flood] = await Promise.all([
-            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.rain, date), lat, lng),
-            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.soilMoisture, date), lat, lng),
-            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.tide, date), lat, lng),
-            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.flood, date), lat, lng),
+        // Read all daily and static layers in parallel
+        const [rainfall, soilMoisture, tide, flood, dem, slope, flow, landCover] = await Promise.all([
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.rain, date), lat, lng, LAYER_FOLDER_MAP.rain.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.soilMoisture, date), lat, lng, LAYER_FOLDER_MAP.soilMoisture.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.tide, date), lat, lng, LAYER_FOLDER_MAP.tide.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.label, date), lat, lng, LAYER_FOLDER_MAP.label.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.dem, date), lat, lng, LAYER_FOLDER_MAP.dem.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.slope, date), lat, lng, LAYER_FOLDER_MAP.slope.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.flow, date), lat, lng, LAYER_FOLDER_MAP.flow.scale),
+            readPixelFromR2Tif(tifKey(region, LAYER_FOLDER_MAP.landCover, date), lat, lng, LAYER_FOLDER_MAP.landCover.scale),
         ]);
 
         // Derive flood risk from available data
@@ -416,28 +467,63 @@ router.get('/pixel/:lat/:lng/:date/:region', async (req, res) => {
         else if (rainfall !== null && rainfall > 40) floodRisk = 'MEDIUM';
 
         // Check if we got at least one value
-        const hasData = [rainfall, soilMoisture, tide, flood].some(v => v !== null);
+        const hasData = [rainfall, soilMoisture, tide, flood, dem, slope, flow, landCover].some(v => v !== null);
         if (!hasData) {
             return fail(res, `No data available for ${region} on ${date}`, 404, 'NOT_FOUND');
         }
 
+        const elapsed = Date.now() - t0;
+        console.log(`⚡ /pixel [${lat.toFixed(4)},${lng.toFixed(4)}] ${date} → ${elapsed}ms`);
+
+        res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=600');
+        res.setHeader('X-Response-Time', `${elapsed}ms`);
         return ok(res, {
             lat, lng, date, region,
             rainfall,
             soilMoisture,
             tide,
             flood,
+            dem,
+            slope,
+            flow,
+            landCover,
             floodRisk,
             bounds,
-            metadata: { source: 'geotiff_r2', layers_checked: Object.keys(LAYER_FOLDER_MAP) },
+            metadata: { source: 'geotiff_r2', layers_checked: Object.keys(LAYER_FOLDER_MAP), responseTimeMs: elapsed },
         });
     } catch (err) {
         return fail(res, `Failed to read pixel data: ${err.message}`);
     }
 });
 
+// ── GET /api/grid/:region/:date/:layer ─────────────────
+// Read full grid data for a given layer
+router.get('/grid/:region/:date/:layer', async (req, res) => {
+    const t0 = Date.now();
+    const { region, date, layer } = req.params;
+
+    if (!isValidRegion(region)) return fail(res, `Invalid region "${region}"`, 400, 'INVALID_REGION');
+    const layerInfo = LAYER_FOLDER_MAP[layer];
+    if (!layerInfo) return fail(res, `Invalid layer "${layer}"`, 400, 'INVALID_LAYER');
+    if (!isValidDate(date) && !layerInfo.isFlat) return fail(res, `Invalid date "${date}"`, 400, 'INVALID_DATE');
+
+    try {
+        const key = tifKey(region, layerInfo, date);
+        const grid = await readGridFromR2Tif(key, layerInfo.scale);
+        if (!grid) return fail(res, `Failed to fetch TIF grid data for layer ${layer}`, 404, 'NOT_FOUND');
+
+        const elapsed = Date.now() - t0;
+        console.log(`⚡ /grid ${layer} ${date} → ${elapsed}ms`);
+        res.setHeader('Cache-Control', layerInfo.isFlat ? 'public, max-age=86400' : 'public, max-age=3600');
+        res.setHeader('X-Response-Time', `${elapsed}ms`);
+        return ok(res, grid);
+    } catch (err) {
+        return fail(res, `Error fetching grid: ${err.message}`);
+    }
+});
+
 // ── GET /api/available-layers/:region/:date ───────────────────
-// Check which PNG masks already exist in R2 for a given day
+// Check which TIF files exist in R2 for a given day
 router.get('/available-layers/:region/:date', async (req, res) => {
     const { region, date } = req.params;
     if (!isValidRegion(region)) return fail(res, `Invalid region "${region}"`, 400, 'INVALID_REGION');
@@ -466,8 +552,9 @@ router.get('/debug/paths', (req, res) => {
         R2_ACCOUNT_ID: R2_ACCOUNT_ID ? '*** (set)' : '(NOT SET)',
         R2_BUCKET,
         R2_PUBLIC_URL,
-        cacheEntries: _cache.size,
-        architecture: 'R2-native (no Postgres)',
+        pixelCacheEntries: _cache.size,
+        tifImageCacheEntries: _tifImageCache.size,
+        architecture: 'R2-native, 2-tier cache, p-limit concurrency',
     });
 });
 
@@ -475,12 +562,13 @@ router.get('/debug/paths', (req, res) => {
 router.get('/health', async (req, res) => {
     let r2Status = 'unknown';
     try {
-        await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: 'processed-masks/', MaxKeys: 1 }));
+        await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: 'FloodData/', MaxKeys: 1 }));
         r2Status = 'connected';
     } catch (e) {
         r2Status = `error: ${e.message}`;
     }
-    ok(res, { status: 'ok', uptime: process.uptime().toFixed(1) + 's', r2: r2Status, cacheSize: _cache.size });
+    res.setHeader('Cache-Control', 'no-cache');
+    ok(res, { status: 'ok', uptime: process.uptime().toFixed(1) + 's', r2: r2Status, pixelCache: _cache.size, tifCache: _tifImageCache.size });
 });
 
 // ── LEGACY REDIRECT ───────────────────────────────────────────
@@ -491,9 +579,43 @@ router.get('/rainfall/:region/:date', (req, res) => {
 
 // ── CACHE MANAGEMENT ─────────────────────────────────────────
 router.delete('/cache', (req, res) => {
-    const size = _cache.size;
+    const pixelSize = _cache.size;
+    const tifSize = _tifImageCache.size;
     _cache.clear();
-    return ok(res, { cleared: size });
+    _tifImageCache.clear();
+    return ok(res, { clearedPixelCache: pixelSize, clearedTifCache: tifSize });
 });
 
 module.exports = router;
+module.exports.readPixelFromR2Tif = readPixelFromR2Tif; // exported for local testing
+
+// ──────────────────────────────────────────────────────────────
+// COLD-START ELIMINATION: Preload static layers into TIF cache
+// ──────────────────────────────────────────────────────────────
+module.exports.preloadStaticLayers = async function preloadStaticLayers() {
+    const region = 'DaNang';
+    const staticLayers = ['dem', 'slope', 'flow', 'landCover'];
+
+    console.log('🔥 Preloading static layers into TIF cache...');
+    const t0 = Date.now();
+
+    const results = await Promise.allSettled(
+        staticLayers.map(async (layerName) => {
+            const info = LAYER_FOLDER_MAP[layerName];
+            const key = tifKey(region, info, '');
+            try {
+                await getCachedTifImage(key);
+                console.log(`  ✅ Preloaded: ${layerName} (${key})`);
+                return layerName;
+            } catch (err) {
+                console.warn(`  ⚠️  Failed to preload ${layerName}: ${err.message}`);
+                return null;
+            }
+        })
+    );
+
+    const loaded = results.filter(r => r.status === 'fulfilled' && r.value).length;
+    const elapsed = Date.now() - t0;
+    console.log(`🔥 Preloaded ${loaded}/${staticLayers.length} static layers in ${elapsed}ms`);
+    console.log(`📊 TIF cache size: ${_tifImageCache.size} objects`);
+};

@@ -6,13 +6,36 @@
     <meta charset="utf-8" />
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
     <title>Vietnam Flood Forecast Dashboard</title>
+    <!-- DNS Prefetch & Preconnect for Performance -->
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://unpkg.com" crossorigin />
+
+    <!-- Tailwind CSS (JIT via CDN - use Play CDN wisely or replace with Static CSS in Production) -->
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap"
-        rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
-    <link
+
+    <!-- Fonts & Icons (Async/Deferred loading tricks) -->
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap"
+        as="style" onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript>
+        <link rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" />
+    </noscript>
+
+    <link rel="preload" href="https://fonts.googleapis.com/icon?family=Material+Icons" as="style"
+        onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+    </noscript>
+
+    <link rel="preload"
         href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
-        rel="stylesheet" />
+        as="style" onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript>
+        <link rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" />
+    </noscript>
 
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -109,14 +132,144 @@
             z-index: 1;
         }
 
+        /*
+         * IMPORTANT: Do NOT put animation with `transform` on .leaflet-popup directly!
+         * Leaflet uses transform: translate3d() to position popups on the map.
+         * Overriding transform breaks popup positioning completely.
+         * Instead, animate the CONTENT WRAPPER (child element) only.
+         */
         .leaflet-popup-content-wrapper {
-            border-radius: 8px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15), 0 2px 10px rgba(0, 0, 0, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            /* Animate the wrapper, NOT .leaflet-popup */
+            animation: popupFadeScale 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+            transform-origin: bottom center;
+        }
+
+        .leaflet-popup-tip-container {
+            animation: popupTipFade 0.3s ease forwards;
+        }
+
+        .leaflet-popup-content {
+            margin: 14px 16px;
+            line-height: 1.6;
+        }
+
+        .leaflet-popup-tip {
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Animate wrapper (safe — Leaflet doesn't set transform on this element) */
+        @keyframes popupFadeScale {
+            0% {
+                opacity: 0;
+                transform: scale(0.85);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes popupTipFade {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+
+        /* Shimmer animation for loading skeleton */
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Spin animation for loading icon */
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* Custom flood popup class for better z-index control */
+        .flood-popup .leaflet-popup-content-wrapper {
+            border-radius: 14px;
+            backdrop-filter: blur(8px);
+            background: rgba(255, 255, 255, 0.97);
+        }
+
+        .flood-popup .leaflet-popup-close-button {
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            font-size: 18px;
+            color: #94a3b8;
+            transition: color 0.2s;
+        }
+
+        .flood-popup .leaflet-popup-close-button:hover {
+            color: #334155;
+        }
+
+        /* Ensure Leaflet popups are always above grid layers */
+        .leaflet-popup-pane {
+            z-index: 700 !important;
+        }
+
+        /* Dark mode popup support */
+        .dark .leaflet-popup-content-wrapper,
+        .dark .flood-popup .leaflet-popup-content-wrapper {
+            background: rgba(30, 41, 59, 0.97);
+            border-color: rgba(71, 85, 105, 0.3);
+        }
+
+        .dark .leaflet-popup-tip {
+            background: rgba(30, 41, 59, 0.97);
         }
     </style>
 </head>
 
 <body
     class="bg-background-light dark:bg-background-dark font-display text-slate-800 dark:text-slate-200 h-screen flex flex-col overflow-hidden">
+
+    <!-- 🚀 GLOBAL APP SPINNER (Perceived Performance) -->
+    <div id="app-loading-overlay"
+        class="fixed inset-0 z-[9999] bg-white dark:bg-slate-900 flex flex-col items-center justify-center transition-opacity duration-500">
+        <div class="h-16 w-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-6 animate-pulse">
+            <span class="material-icons text-primary text-4xl animate-bounce">water_drop</span>
+        </div>
+        <h2 class="text-xl font-bold text-slate-800 dark:text-white mb-2">Vietnam Flood System</h2>
+        <div class="flex items-center gap-2 text-sm text-slate-500 font-medium">
+            <span class="material-icons text-sm animate-spin">refresh</span>
+            Loading map & resources...
+        </div>
+        <div class="w-48 h-1 bg-slate-100 dark:bg-slate-800 rounded-full mt-6 overflow-hidden">
+            <div class="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite] w-1/2"></div>
+        </div>
+        <style>
+            @keyframes progress {
+                0% {
+                    transform: translateX(-100%);
+                }
+
+                100% {
+                    transform: translateX(200%);
+                }
+            }
+        </style>
+    </div>
+    <script>
+        // Tắt overlay ngay khi DOM load xong cơ bản (Map sẽ init ngầm)
+        window.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                const overlay = document.getElementById('app-loading-overlay');
+                if (overlay) {
+                    overlay.style.opacity = '0';
+                    setTimeout(() => overlay.remove(), 500);
+                }
+            }, 800); // Đợi CSS fonts/styles apply
+        });
+    </script>
+
     <!-- Header -->
     <header
         class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 h-16 flex items-center justify-between px-6 shadow-sm z-20 shrink-0">
@@ -421,46 +574,7 @@
                         <span class="material-icons">my_location</span>
                     </button>
                 </div>
-                <!-- Selected Pixel Popup (Hidden by default - shown by map.js on click) -->
-                <div class="absolute top-1/3 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 hidden"
-                    id="demo-popup">
-                    <!-- Pin -->
-                    <div class="relative flex justify-center mb-2 animate-bounce">
-                        <span class="material-icons text-risk-high text-5xl drop-shadow-md">location_on</span>
-                        <div class="absolute bottom-1 w-3 h-1 bg-black/30 rounded-full blur-[2px]"></div>
-                    </div>
-                    <!-- Popup Card -->
-                    <div
-                        class="bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-100 dark:border-slate-700 p-4 w-64 relative before:content-[''] before:absolute before:top-[-8px] before:left-1/2 before:-translate-x-1/2 before:border-l-[8px] before:border-r-[8px] before:border-b-[8px] before:border-l-transparent before:border-r-transparent before:border-b-white dark:before:border-b-slate-800">
-                        <div
-                            class="flex justify-between items-start mb-2 border-b border-slate-100 dark:border-slate-700 pb-2">
-                            <h4 class="font-bold text-slate-800 dark:text-white">Selected Area</h4>
-                            <span
-                                class="bg-risk-high/10 text-risk-high text-[10px] font-bold px-2 py-0.5 rounded border border-risk-high/20">HIGH
-                                RISK</span>
-                        </div>
-                        <div class="space-y-2">
-                            <div class="flex justify-between text-xs">
-                                <span class="text-slate-500">Coordinates:</span>
-                                <span class="font-mono text-slate-700 dark:text-slate-300">10.76N, 106.66E</span>
-                            </div>
-                            <div class="flex justify-between text-xs">
-                                <span class="text-slate-500">Rainfall (24h):</span>
-                                <span class="font-bold text-primary">120 mm</span>
-                            </div>
-                            <div class="flex justify-between text-xs">
-                                <span class="text-slate-500">Water Level:</span>
-                                <span class="font-bold text-slate-700 dark:text-slate-300">+2.4m</span>
-                            </div>
-                        </div>
-                        <div class="mt-3 flex gap-2">
-                            <button
-                                class="flex-1 bg-primary text-white text-xs py-1.5 rounded hover:bg-blue-700 transition">Details</button>
-                            <button
-                                class="flex-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs py-1.5 rounded hover:bg-slate-200 transition">Dismiss</button>
-                        </div>
-                    </div>
-                </div>
+                <!-- Popup is now handled by Leaflet L.popup() in map.js -->
 
                 <!-- Pixel Parameters Panel removed in favor of Map Popup -->
             </section>
@@ -589,34 +703,34 @@
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
 
     <!-- Leaflet.heat plugin -->
-    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" defer></script>
 
     <!-- Turf.js for spatial analysis -->
-    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js" defer></script>
 
-    <!-- Map Integration Script -->
-    <script src="/js/config.js"></script>
-    <script src="/js/data-loader.js"></script>
-    <script src="/js/map.js"></script>
-    <script src="/js/data-panels.js"></script>
-    <script src="/js/date-manager.js"></script>
+    <!-- Map Integration Script (cache-bust with version param) -->
+    <script src="/js/config.js?v=20260226" defer></script>
+    <script src="/js/data-loader.js?v=20260226" defer></script>
+    <script src="/js/map.js?v=20260226" defer></script>
+    <script src="/js/data-panels.js?v=20260226" defer></script>
+    <script src="/js/date-manager.js?v=20260226" defer></script>
 
     <!-- Live Clock Script -->
     <script>
-            (function () {
-                function updateClock() {
-                    var now = new Date();
-                    var options = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' };
-                    var timeStr = now.toLocaleTimeString('vi-VN', options);
-                    var clockElem = document.getElementById('live-clock');
-                    if (clockElem) clockElem.textContent = timeStr + ' UTC+7';
-                }
-                updateClock();
-                setInterval(updateClock, 1000);
-            })();
+        (function () {
+            function updateClock() {
+                var now = new Date();
+                var options = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' };
+                var timeStr = now.toLocaleTimeString('vi-VN', options);
+                var clockElem = document.getElementById('live-clock');
+                if (clockElem) clockElem.textContent = timeStr + ' UTC+7';
+            }
+            updateClock();
+            setInterval(updateClock, 1000);
+        })();
     </script>
 </body>
 
