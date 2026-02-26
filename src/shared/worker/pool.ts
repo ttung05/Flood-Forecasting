@@ -39,7 +39,9 @@ export class TifWorkerPool {
         const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
         const workerPath = path.join(__dirname, `tif-worker.${ext}`);
         for (let i = 0; i < size; i++) {
-            const w = new Worker(workerPath, { workerData: {} });
+            const workerOps: Record<string, any> = { workerData: {} };
+            if (ext === 'ts') workerOps.execArgv = ['--import', 'tsx'];
+            const w = new Worker(workerPath, workerOps);
             w.on('message', (result: DecodeResponse) => this.onResult(w, result));
             w.on('error', (err: Error) => this.onError(w, err));
             this.workers.push(w);
@@ -113,7 +115,9 @@ export class TifWorkerPool {
         if (idx >= 0) {
             const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
             const workerPath = path.join(__dirname, `tif-worker.${ext}`);
-            const newW = new Worker(workerPath, { workerData: {} });
+            const workerOps: Record<string, any> = { workerData: {} };
+            if (ext === 'ts') workerOps.execArgv = ['--import', 'tsx'];
+            const newW = new Worker(workerPath, workerOps);
             newW.on('message', (r: DecodeResponse) => this.onResult(newW, r));
             newW.on('error', (e: Error) => this.onError(newW, e));
             this.workers[idx] = newW;

@@ -56,26 +56,15 @@ const LayerManager = window.LayerManager = {
     updateAvailability: async function (date, region) {
         this.currentDate = date;
         this.currentRegion = region;
-        try {
-            const response = await fetch(`${window.API_BASE_URL || ''}/api/available-layers/${region}/${date}`);
-            const envelope = await response.json();
-            const payload = envelope.success ? envelope.data : null;
 
-            if (payload && payload.layers) {
-                this.availability = payload.layers;
-                if (payload.hasAnyData) {
-                    const standardLayers = ['label', 'rain', 'soilMoisture', 'static'];
-                    standardLayers.forEach(layer => { this.availability[layer] = true; });
-                }
-            } else {
-                this.availability = {};
-            }
-            this.updateUI();
-        } catch (error) {
-            console.error('❌ Error checking availability:', error);
-            this.availability = {};
-            this.updateUI();
-        }
+        // Tất cả các layers tiêu chuẩn luôn có sẵn thông qua bộ prebuilt lưới hoặc static map
+        this.availability = {
+            label: true,
+            rain: true,
+            soilMoisture: true,
+            static: true
+        };
+        this.updateUI();
     },
 
     updateUI: function () {

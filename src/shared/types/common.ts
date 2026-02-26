@@ -18,7 +18,7 @@ export const DateStrSchema = z.string().regex(
 );
 export const LatSchema = z.coerce.number().min(-90).max(90);
 export const LngSchema = z.coerce.number().min(-180).max(180);
-export const LayerSchema = z.enum(['rain', 'soilMoisture', 'tide', 'label']);
+export const LayerSchema = z.enum(['rain', 'soilMoisture', 'tide', 'label', 'dem', 'slope', 'flow', 'landCover']);
 
 // ── Constants ──────────────────────────────────────────────
 export const VALID_REGIONS = ['DaNang'] as const;

@@ -59,6 +59,7 @@ app.use('/api/*', (req, res) => {
     });
 });
 
+
 // Serve frontend in local/render mode
 const frontendPath = path.join(process.cwd(), 'frontend');
 app.use(express.static(frontendPath, {
