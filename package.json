@@ -4,8 +4,10 @@
   "description": "Vietnam Flood Prediction System Dashboard",
   "main": "api/index.js",
   "scripts": {
-    "dev": "node api/index.js",
-    "start": "node api/index.js"
+    "dev": "npx tsx watch src/index.ts",
+    "build": "npx tsc",
+    "typecheck": "npx tsc --noEmit",
+    "start": "node dist/index.js"
   },
   "keywords": [
     "flood",
@@ -24,6 +26,15 @@
     "express": "^4.18.2",
     "geotiff": "^3.0.3",
     "p-limit": "^7.3.0",
-    "proj4": "^2.20.2"
+    "proj4": "^2.20.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

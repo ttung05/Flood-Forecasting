@@ -111,12 +111,89 @@ const LayerManager = window.LayerManager = {
 document.addEventListener('DOMContentLoaded', () => { setTimeout(() => { LayerManager.init(); }, 800); });
 
 
+// ============================================================
+// PNG MASK OVERLAY — 1 ImageOverlay replaces 400 DOM rectangles
+// ============================================================
+let _maskOverlay = null;
+let _maskAbortController = null;
+const MASK_BOUNDS = {
+    DaNang: [[15.95, 107.90], [16.25, 108.40]],
+};
+
+/**
+ * Render flood mask as a single PNG ImageOverlay.
+ * Pipeline (build_mask_png.py) generates 20x20 RGBA PNGs:
+ *   - Red (255,50,50,140) = flood
+ *   - Grey (128,128,128,100) = cloud/nodata
+ *   - Transparent = no flood
+ *
+ * @param {string} region - Region name (e.g. 'DaNang')
+ * @param {string} date   - Date string YYYY-MM-DD
+ * @returns {Promise<boolean>} - Whether mask was loaded
+ */
+async function renderFloodMask(region, date) {
+    // Cancel previous
+    if (_maskAbortController) _maskAbortController.abort();
+    _maskAbortController = new AbortController();
+
+    const bounds = MASK_BOUNDS[region];
+    if (!bounds) {
+        console.warn('⚠️ No mask bounds for region:', region);
+        return false;
+    }
+
+    const maskUrl = `${API_BASE_URL}/api/mask/${region}/${date}/label.png`;
+
+    try {
+        const res = await fetchWithTimeout(maskUrl, {
+            signal: _maskAbortController.signal,
+        }, 5000);
+
+        if (!res.ok) {
+            console.log('ℹ️ Mask PNG not available, using legacy grid');
+            return false;
+        }
+
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+
+        if (_maskOverlay) {
+            // Update existing overlay — no DOM churn
+            _maskOverlay.setUrl(objectUrl);
+            _maskOverlay.setBounds(bounds);
+        } else {
+            // Create new overlay — 1 DOM element total
+            _maskOverlay = L.imageOverlay(objectUrl, bounds, {
+                opacity: 0.6,
+                interactive: false,
+                className: 'flood-mask-overlay',
+                zIndex: 400,
+            }).addTo(map);
+        }
+
+        console.log('✅ Flood mask loaded (1 DOM node vs 400 rects)');
+        return true;
+    } catch (err) {
+        if (err.name === 'AbortError') return false;
+        console.warn('⚠️ Mask load failed:', err.message);
+        return false;
+    }
+}
+
+/** Remove flood mask overlay from map */
+function clearFloodMask() {
+    if (_maskOverlay) {
+        map.removeLayer(_maskOverlay);
+        _maskOverlay = null;
+    }
+}
+
 // ... existing code ...
 
 // Pixel Parameters Panel logic removed to prefer only Map Popup
 
 // ============================================================
-// PERFORMANCE: AbortController + Throttle for map clicks
+// PERFORMANCE: AbortController + Throttle + Dedup for map clicks
 // ============================================================
 let _pixelAbortController = null;
 let _lastClickTime = 0;
@@ -125,6 +202,9 @@ const CLICK_THROTTLE_MS = 300;
 // Inference-ready: Cache last N pixel results to avoid duplicate API calls
 const _pixelResultCache = new Map();
 const PIXEL_RESULT_CACHE_MAX = 50;
+
+// Request Deduplication: Reuse in-flight fetch promises (same URL = same promise)
+const _inflightRequests = new Map();
 
 function getPixelCacheKey(lat, lng, date) {
     return `${lat.toFixed(4)}_${lng.toFixed(4)}_${date}`;
@@ -151,16 +231,24 @@ function readPixelFromCachedGrid(layer, region, date, lat, lng) {
 }
 
 // ============================================================
-// FETCH WITH TIMEOUT - Prevent hanging when API is slow/down
+// FETCH WITH TIMEOUT + DEDUPLICATION
 // ============================================================
 const PIXEL_FETCH_TIMEOUT_MS = 10000; // 10 seconds max
 
+/**
+ * Deduplicated fetch: If same URL is already in-flight, reuse that promise.
+ * Prevents duplicate API calls when user clicks rapidly at same location.
+ */
 function fetchWithTimeout(url, options = {}, timeoutMs = PIXEL_FETCH_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
+    // Check for in-flight request with same URL (deduplication)
+    const dedupKey = url;
+    if (!options.signal && _inflightRequests.has(dedupKey)) {
+        console.log('🔄 Reusing in-flight request:', dedupKey.split('/').slice(-4).join('/'));
+        return _inflightRequests.get(dedupKey);
+    }
+
+    const promise = new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-            if (options.signal) {
-                // Don't abort the original controller, create a timeout error
-            }
             reject(new Error(`Request timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
@@ -168,6 +256,14 @@ function fetchWithTimeout(url, options = {}, timeoutMs = PIXEL_FETCH_TIMEOUT_MS)
             .then(res => { clearTimeout(timer); resolve(res); })
             .catch(err => { clearTimeout(timer); reject(err); });
     });
+
+    // Store and auto-cleanup
+    if (!options.signal) {
+        _inflightRequests.set(dedupKey, promise);
+        promise.finally(() => _inflightRequests.delete(dedupKey));
+    }
+
+    return promise;
 }
 
 // ============================================================
