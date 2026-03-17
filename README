@@ -1,0 +1,59 @@
+# 🌊 Da Nang Flood AI Prediction System (DAP391m)
+
+Hệ thống tích hợp thu thập dữ liệu tự động (Airflow), phân tích dữ liệu (EDA) và dự báo ngập lụt khu vực Đà Nẵng bằng mô hình Deep Learning (FloodSOTA-V2).
+
+---
+
+## 📂 Dữ liệu & Mô hình (Data & Model)
+
+Do kích thước tệp lớn, dữ liệu `.npz` và trọng số mô hình `.pth` được lưu trữ tại liên kết dưới đây. 
+Vui lòng tải về và đặt vào đúng thư mục cấu trúc trước khi khởi chạy:
+
+📌 **[Tải dữ liệu và Model tại đây](https://drive.google.com/drive/folders/1BrEy_5SQVTIG97ofJbNlTW4fuC2SkgDv?usp=drive_link)**
+
+* **Dữ liệu:** Lưu vào thư mục `Data/` ở thư mục gốc.
+* **Model:** Lưu file `best_flood_model_v2.pth` vào thư mục gốc của project.
+
+---
+
+## 🛠️ Hướng dẫn Khởi chạy (Setup & Execution)
+
+### 1. Môi trường Python (Local Dashboard)
+Để chạy Dashboard Streamlit dưới máy local:
+
+```powershell
+# Kích hoạt môi trường ảo
+.\venv\Scripts\activate
+
+# Cài đặt thư viện (nếu chưa có)
+pip install -r requirements.txt
+
+# Chạy Dashboard
+cd Dashboard
+streamlit run app.py
+2. Hệ thống Airflow (Docker)
+Để vận hành Pipeline thu thập dữ liệu tự động qua Docker:
+
+PowerShell
+# Dừng và xóa các tài nguyên cũ (Volume, Container)
+docker compose down --v 
+
+# Xây dựng lại Image
+docker compose build
+
+# Khởi chạy hệ thống ở chế độ chạy ngầm
+docker compose up -d
+Truy cập Airflow UI tại: http://localhost:8080
+
+🏗️ Cấu trúc thư mục (Project Structure)
+airflow/: Chứa các Dags, Config và Scripts thu thập dữ liệu.
+
+Dashboard/: Mã nguồn giao diện Streamlit và định nghĩa Model.
+
+Data/: Thư mục chứa các file dữ liệu huấn luyện/kiểm thử (.npz).
+
+best_flood_model_v2.pth: File trọng số mô hình đã huấn luyện.
+
+.gitignore: Cấu hình loại trừ các tệp tin nặng khi đẩy lên GitHub.
+
+Lê Hồ Anh Duy - DE200171 Project phục vụ môn học DAP391m - FPT University Da Nang.
