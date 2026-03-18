@@ -242,10 +242,13 @@ export async function getGrid(params: GridParams): Promise<Result<GridJSON, AppE
     }
     } // end if (_tifKey && _getCachedTifImage)
 
-    // ── Strategy 3: Local NPZ file decode ──
+    // ── Strategy 3: Local NPZ file decode (and R2 fallback) ──
     try {
-        const { loadNpzFromLocal } = await import('../../shared/legacy/npz-reader');
-        const npz = await loadNpzFromLocal(date);
+        const { loadNpzFromLocal, loadNpzFromR2 } = await import('../../shared/legacy/npz-reader');
+        let npz = await loadNpzFromLocal(date);
+        if (!npz) {
+            npz = await loadNpzFromR2(date);
+        }
         if (npz) {
             const bandIdx = LAYER_TO_BAND_INDEX[layer];
             if (bandIdx === undefined || bandIdx >= npz.bands) {

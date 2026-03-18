@@ -91,7 +91,8 @@ function computeAndRenderTables() {
             if (layerId === 'landCover') {
                 lulcCounts[v] = (lulcCounts[v] || 0) + 1;
             } else if (layerId === 'label') {
-                labelCounts[v] = (labelCounts[v] || 0) + 1;
+                const cat = v > 0 ? 1 : 0;
+                labelCounts[cat] = (labelCounts[cat] || 0) + 1;
             }
         }
 
@@ -174,7 +175,7 @@ function computeAndRenderTables() {
         for (let r = 0; r < sizeR; r++) {
             for (let c = 0; c < sizeC; c++) {
                 const idx = r * sizeC + c;
-                const isFlood = labelGrid.data[idx] === 1; // Assuming scale 1
+                const isFlood = labelGrid.data[idx] > 0;
                 const rainVal = (rainGrid.data[idx] / (rainGrid.scale||1));
                 
                 // We'll collect all flood pixels, or high rain pixels. 
@@ -260,7 +261,7 @@ function computeAndRenderTables() {
     const tbodyFlood = document.getElementById('table-cat-flood').querySelector('tbody');
     tbodyFlood.innerHTML = Object.entries(labelCounts).map(([cat, count]) => {
         const pct = ((count / totalPixels)*100).toFixed(2);
-        const name = cat == 1 ? "Ngập lụt (1)" : "Bình thường (0)";
+        const name = cat == 1 ? "Ngập lụt (>0)" : "Bình thường (<=0)";
         return `<tr><td class="font-bold ${cat==1?'text-red-600':''}">${name}</td><td>${count.toLocaleString()}</td><td>${pct}%</td></tr>`;
     }).join('');
     dataTables.catFlood = $('#table-cat-flood').DataTable({ ...dtOptions, order: [[1, 'desc']], dom: 'rtip' });

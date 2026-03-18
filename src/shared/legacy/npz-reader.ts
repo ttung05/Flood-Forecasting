@@ -194,7 +194,7 @@ export async function getLocalRainfallTotal(date: string, region: string): Promi
 /**
  * Download and parse NPZ from R2.
  */
-async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
+export async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
     const key = npzKey(date);
     const cacheKey = `npz_${date}`;
 

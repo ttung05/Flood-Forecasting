@@ -831,7 +831,8 @@ function createGridCanvasOverlay(gridData) {
 
                     if (w < 1 || h < 1) continue;
 
-                    ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
+                    const opacity = Math.max(0.15, Math.min(0.8, val));
+                    ctx.fillStyle = `rgba(239, 68, 68, ${opacity.toFixed(2)})`;
                     ctx.fillRect(x, y, w, h);
                 }
             }
@@ -876,7 +877,10 @@ function createGridImageOverlay(gridData, boundsObj) {
             px[o + 0] = 239; // R
             px[o + 1] = 68;  // G
             px[o + 2] = 68;  // B
-            px[o + 3] = 140; // A
+            // Map value > 0 to an appropriate opacity (assuming v is roughly 0.0-1.0 probability or depth)
+            // Starts at roughly 40 (15%) and goes up to 200 (78%)
+            const alpha = Math.max(40, Math.min(255, Math.floor((v * 160) + 40)));
+            px[o + 3] = alpha; // A
         } else {
             px[o + 3] = 0;
         }

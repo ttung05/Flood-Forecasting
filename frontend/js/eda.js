@@ -27,7 +27,7 @@ let CURRENT_DATE = urlParams.get('date') || '';
 // ── Layer Configuration ──
 const LAYERS = [
     { id: 'dem', label: 'DEM (m)', colorscale: 'YlGn', unit: 'm', isCat: false },
-    { id: 'label', label: 'Flood Label', colorscale: [[0, '#e8f4f8'], [1, '#1e40af']], unit: '', isCat: true, catLabels: { 0: 'Bình thường (0)', 1: 'Ngập Flood (1)' } },
+    { id: 'label', label: 'Flood Risk', colorscale: 'Reds', unit: '', isCat: false },
     { id: 'flow', label: 'Flow Accumulation', colorscale: 'Blues', unit: '', isCat: false },
     { id: 'landCover', label: 'Land Cover Index', colorscale: 'Earth', unit: '', isCat: false },
     { id: 'rain', label: 'Rainfall 24h (mm)', colorscale: 'YlGnBu', unit: 'mm', isCat: false },
@@ -37,6 +37,8 @@ const LAYERS = [
 ];
 
 const gridData = {};
+window.LAYERS = LAYERS;
+window.gridData = gridData;
 let lastLoadTime = null;
 
 // ── UI Helpers ──
