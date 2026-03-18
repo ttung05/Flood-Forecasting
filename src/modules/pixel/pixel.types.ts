@@ -16,6 +16,13 @@ export const PixelParamsSchema = z.object({
 export type PixelParams = z.infer<typeof PixelParamsSchema>;
 
 // ── Response DTO ───────────────────────────────────────────
+export interface MlPrediction {
+    flood_risk: 'LOW' | 'MEDIUM' | 'HIGH';
+    probability: number[];
+    confidence: number;
+    model_version: string;
+}
+
 export interface PixelData {
     lat: number;
     lng: number;
@@ -30,9 +37,10 @@ export interface PixelData {
     flow: number | null;
     landCover: number | null;
     floodRisk: FloodRisk;
+    mlPrediction?: MlPrediction | null;
     bounds: { north: number; south: number; east: number; west: number };
     metadata: {
-        source: 'stacked_cog' | 'legacy_8tif';
+        source: 'npz' | 'stacked_cog' | 'legacy_8tif';
         traceId: string;
         responseTimeMs: number;
         cacheSize: { tif: number; pixel: number };

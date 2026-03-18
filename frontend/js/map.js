@@ -6,6 +6,7 @@ let heatmapLayer;
 let boundingBoxes = [];
 let rainHeatLayer = null;   // L.heatLayer cho rainfall (tuỳ chọn)
 let isUpdating = false;     // Lock để ngăn race condition
+let _dataBoundsRect = null; // single rectangle for data extent visualization
 
 let currentDate = null; // Will be auto-set from API (latest available date)
 let currentRegion = 'DaNang';
@@ -131,7 +132,7 @@ async function renderFloodMask(region, date) {
         return false;
     }
 
-    const maskUrl = `${API_BASE_URL}/api/mask/${region}/${date}/label.png`;
+    const maskUrl = `${window.API_BASE_URL || ''}/api/mask/${region}/${date}/label.png`;
 
     try {
         const res = await fetchWithTimeout(maskUrl, {
@@ -177,16 +178,43 @@ function clearFloodMask() {
     }
 }
 
+/** Update (or create) a single bounds rectangle for visual debugging */
+function setDataBoundsRect(bounds) {
+    if (!map || !bounds) return;
+    const leafletBounds = [[bounds.south, bounds.west], [bounds.north, bounds.east]];
+
+    if (_dataBoundsRect) {
+        _dataBoundsRect.setBounds(leafletBounds);
+        return;
+    }
+    _dataBoundsRect = L.rectangle(leafletBounds, {
+        color: '#2196F3',
+        weight: 1,
+        fill: false,
+        dashArray: '5, 5',
+        interactive: false,
+    }).addTo(map);
+}
+
+function clearDataBoundsRect() {
+    if (_dataBoundsRect && map) {
+        map.removeLayer(_dataBoundsRect);
+        _dataBoundsRect = null;
+    }
+}
+
 // ... existing code ...
 
 // Pixel Parameters Panel logic removed to prefer only Map Popup
 
 // ============================================================
-// PERFORMANCE: AbortController + Throttle + Dedup for map clicks
+// PERFORMANCE: AbortController + Debounce + Throttle + Dedup for map clicks
 // ============================================================
 let _pixelAbortController = null;
 let _lastClickTime = 0;
+let _clickDebounceTimer = null;
 const CLICK_THROTTLE_MS = 300;
+const CLICK_DEBOUNCE_MS = 150;
 
 // Inference-ready: Cache last N pixel results to avoid duplicate API calls
 const _pixelResultCache = new Map();
@@ -194,6 +222,9 @@ const PIXEL_RESULT_CACHE_MAX = 50;
 
 // Request Deduplication: Reuse in-flight fetch promises (same URL = same promise)
 const _inflightRequests = new Map();
+
+// Track which date was requested to detect stale responses
+let _pendingPixelDate = null;
 
 function getPixelCacheKey(lat, lng, date) {
     return `${lat.toFixed(4)}_${lng.toFixed(4)}_${date}`;
@@ -220,9 +251,28 @@ function readPixelFromCachedGrid(layer, region, date, lat, lng) {
 }
 
 // ============================================================
+// NORMALIZE DATE FOR PIXEL URL (always one path segment: YYYY-MM-DD)
+// Prevents broken route when date is DD/MM/YYYY (e.g. 03/01/2020 -> date=03, region=01)
+// ============================================================
+function normalizeDateForUrl(value) {
+    if (value == null || value === undefined) return null;
+    const s = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) {
+        const d = parseInt(m[1], 10), mo = parseInt(m[2], 10), y = parseInt(m[3], 10);
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31)
+            return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    }
+    return null;
+}
+
+// ============================================================
 // FETCH WITH TIMEOUT + DEDUPLICATION
 // ============================================================
-const PIXEL_FETCH_TIMEOUT_MS = 10000; // 10 seconds max
+// NOTE: Pixel API can be slow when backend is forced to full-download GeoTIFF/NPZ (no HTTP Range).
+// Keep this high enough to avoid false timeouts on constrained networks.
+const PIXEL_FETCH_TIMEOUT_MS = 30000; // 30 seconds max
 
 /**
  * Deduplicated fetch: If same URL is already in-flight, reuse that promise.
@@ -256,6 +306,50 @@ function fetchWithTimeout(url, options = {}, timeoutMs = PIXEL_FETCH_TIMEOUT_MS)
 }
 
 // ============================================================
+// FETCH WITH RETRY (for large grid downloads)
+// ============================================================
+async function fetchWithRetryTimeout(url, {
+    timeoutMs = 60000,
+    retries = 2,
+    backoffMs = 800,
+    signal,
+} = {}) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), timeoutMs);
+
+        // If caller provided a signal, abort this request too
+        const onAbort = () => controller.abort();
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+
+        try {
+            const res = await fetch(url, { signal: controller.signal });
+            clearTimeout(t);
+            if (signal) signal.removeEventListener('abort', onAbort);
+
+            // Retry on transient failures (queue full / gateway timeout)
+            if ((res.status === 503 || res.status === 504) && attempt < retries) {
+                const sleep = backoffMs * Math.pow(2, attempt);
+                await new Promise(r => setTimeout(r, sleep));
+                continue;
+            }
+            return res;
+        } catch (e) {
+            clearTimeout(t);
+            if (signal) signal.removeEventListener('abort', onAbort);
+            lastErr = e;
+            if (attempt < retries) {
+                const sleep = backoffMs * Math.pow(2, attempt);
+                await new Promise(r => setTimeout(r, sleep));
+                continue;
+            }
+        }
+    }
+    throw lastErr || new Error('Grid fetch failed');
+}
+
+// ============================================================
 // SAFE POPUP CONTENT BUILDER - Prevents template literal crashes
 // ============================================================
 function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
@@ -264,18 +358,40 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
         const riskColor = getRiskColor(risk);
         const regionName = region === 'DaNang' ? 'Đà Nẵng' : (region === 'DBSCL' ? 'Đồng Bằng Sông Cửu Long' : region);
 
-        // Safe value formatters
-        const fmtVal = (v, unit, decimals) => {
+        // Safe value formatters (backend now returns de-normalized physical values)
+        const fmtVal = (v, unit, decimals = 2) => {
             if (v == null || v === undefined) return 'N/A';
             const num = Number(v);
             if (isNaN(num)) return 'N/A';
-            return decimals !== undefined ? num.toFixed(decimals) + unit : num + unit;
+            return num.toFixed(decimals) + unit;
         };
-        const soilPct = (v) => {
+        const fmtPct = (v) => {
             if (v == null || v === undefined) return 'N/A';
             const num = Number(v);
             if (isNaN(num)) return 'N/A';
             return (num * 100).toFixed(1) + '%';
+        };
+        const fmtLandCover = (v) => {
+            if (v == null || v === undefined) return 'N/A';
+            const num = Number(v);
+            if (isNaN(num)) return 'N/A';
+            if (num < 0.05) return 'Water / N/A';
+            if (num < 0.15) return 'Trees';
+            if (num < 0.25) return 'Shrubland';
+            if (num < 0.35) return 'Grassland';
+            if (num < 0.45) return 'Cropland';
+            if (num < 0.55) return 'Built-up';
+            if (num < 0.65) return 'Bare / Sparse';
+            if (num < 0.75) return 'Snow / Ice';
+            if (num < 0.85) return 'Water body';
+            if (num < 0.95) return 'Wetland';
+            return 'Mangroves';
+        };
+        const fmtFlood = (v) => {
+            if (v == null || v === undefined) return 'N/A';
+            const num = Number(v);
+            if (isNaN(num)) return 'N/A';
+            return (num * 100).toFixed(0) + '%';
         };
 
         return `
@@ -309,31 +425,35 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
                     </strong>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
                         <span style="color: #64748b;">🌧 Rainfall (24h):</span>
-                        <span style="font-weight: 600; color: #1d4ed8;">${fmtVal(data.rainfall, ' mm')}</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                        <span style="color: #64748b;">DEM (Elevation):</span>
-                        <span style="font-weight: 600; color: #059669;">${fmtVal(data.dem, ' m')}</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                        <span style="color: #64748b;">Slope:</span>
-                        <span style="font-weight: 600; color: #7e22ce;">${fmtVal(data.slope, '°')}</span>
+                        <span style="font-weight: 600; color: #1d4ed8;">${fmtVal(data.rainfall, ' mm', 1)}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
                         <span style="color: #64748b;">Soil Moisture:</span>
-                        <span style="font-weight: 600; color: #dc2626;">${soilPct(data.soilMoisture)}</span>
+                        <span style="font-weight: 600; color: #dc2626;">${fmtPct(data.soilMoisture)}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                        <span style="color: #64748b;">Flow:</span>
-                        <span style="font-weight: 600; color: #0891b2;">${fmtVal(data.flow, ' m³/s')}</span>
+                        <span style="color: #64748b;">Tide Level:</span>
+                        <span style="font-weight: 600; color: #0891b2;">${fmtVal(data.tide, ' m', 2)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Flood Probability:</span>
+                        <span style="font-weight: 600; color: #b91c1c;">${fmtFlood(data.flood)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">DEM Index:</span>
+                        <span style="font-weight: 600; color: #059669;">${fmtVal(data.dem, '', 4)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Slope:</span>
+                        <span style="font-weight: 600; color: #7e22ce;">${fmtVal(data.slope, '°', 1)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                        <span style="color: #64748b;">Flow Accumulation:</span>
+                        <span style="font-weight: 600; color: #0e7490;">${fmtVal(data.flow, '', 0)}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
                         <span style="color: #64748b;">Land Cover:</span>
-                        <span style="font-weight: 500; color: #475569;">${data.landCover != null ? data.landCover : 'N/A'}</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
-                        <span style="color: #64748b;">Tide:</span>
-                        <span style="font-weight: 500; color: #475569;">${fmtVal(data.tide, ' m')}</span>
+                        <span style="font-weight: 500; color: #475569;">${fmtLandCover(data.landCover)}</span>
                     </div>
 
                     <!-- Risk Bar -->
@@ -405,17 +525,24 @@ function buildLoadingPopupContent(lat, lng) {
     `;
 }
 
-// Handle map click (with throttle + abort + loading state + timeout)
+// Handle map click (with debounce + throttle + abort + loading state + timeout)
 async function handleMapClick(e) {
     console.log('🖱️ === MAP CLICK EVENT FIRED ===');
     console.log('🖱️ Click coords:', e.latlng.lat.toFixed(4), e.latlng.lng.toFixed(4));
     console.log('🖱️ currentDate:', currentDate, '| currentRegion:', currentRegion);
     console.log('🖱️ API_BASE_URL:', JSON.stringify(window.API_BASE_URL));
 
+    // Debounce: cancel rapid successive clicks, only process the last one
+    if (_clickDebounceTimer) {
+        clearTimeout(_clickDebounceTimer);
+        _clickDebounceTimer = null;
+    }
+
     // Throttle: skip if called too quickly
     const now = Date.now();
     if (now - _lastClickTime < CLICK_THROTTLE_MS) {
-        console.log('⏳ Click throttled');
+        console.log('⏳ Click throttled, scheduling debounce...');
+        _clickDebounceTimer = setTimeout(() => handleMapClick(e), CLICK_DEBOUNCE_MS);
         return;
     }
     _lastClickTime = now;
@@ -425,6 +552,8 @@ async function handleMapClick(e) {
         _pixelAbortController.abort();
     }
     _pixelAbortController = new AbortController();
+    const requestDate = currentDate; // Capture date at request time
+    _pendingPixelDate = requestDate;
     const { lat, lng } = e.latlng;
 
     // Check if click is in data region
@@ -468,7 +597,9 @@ async function handleMapClick(e) {
 
     try {
         // ====== STEP 2: Fetch pixel data WITH TIMEOUT ======
-        const url = `${window.API_BASE_URL || ''}/api/pixel/${lat}/${lng}/${currentDate}/${region}`;
+        // Use YYYY-MM-DD in URL so path has one segment (DD/MM/YYYY would break route)
+        const dateForUrl = normalizeDateForUrl(currentDate) || currentDate;
+        const url = `${window.API_BASE_URL || ''}/api/pixel/${lat}/${lng}/${dateForUrl}/${region}`;
         console.log('🔗 Fetching URL:', url);
         const t0 = performance.now();
 
@@ -489,9 +620,18 @@ async function handleMapClick(e) {
         if (!envelope.success) {
             console.warn(`⚠️ API Error: ${envelope.error?.message || response.status}`);
             data = { floodRisk: 'NO DATA', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
+        } else if (envelope.data == null || envelope.data === undefined) {
+            console.warn('⚠️ API returned success but no data');
+            data = { floodRisk: 'NO DATA', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
         } else {
             data = envelope.data;
             console.log(`✅ Pixel data fetched in ${elapsed}ms (server: ${data.metadata?.responseTimeMs || '?'}ms)`);
+        }
+
+        // Stale response detection: if date changed while request was in-flight, discard
+        if (_pendingPixelDate !== requestDate) {
+            console.log('🔄 Discarding stale pixel response (date changed)');
+            return;
         }
 
         // ====== STEP 3: Update popup with real data (smooth transition) ======
@@ -582,82 +722,242 @@ function getRiskColor(risk) {
 
 // ============================================================
 // FLOOD MASK LAYER - Hiển thị vùng ngập lụt dạng polygon đỏ
+// Canvas overlay để lưới đỏ scale đúng khi zoom in/out
 // ============================================================
 
 // Bounds của từng region - PHAI khop voi seed_sample_data.py va server/api.js
 
+/**
+ * Custom Leaflet layer: vẽ grid lên canvas, scale đúng khi zoom in/out.
+ * Redraw mỗi khi map move/zoom để lưới luôn khớp với bản đồ (tọa độ địa lý).
+ */
+function createGridCanvasOverlay(gridData) {
+    const width = gridData.size?.c ?? gridData.width;
+    const height = gridData.size?.r ?? gridData.height;
+    const bounds = {
+        north: gridData.bounds.n ?? gridData.bounds.north,
+        south: gridData.bounds.s ?? gridData.bounds.south,
+        east:  gridData.bounds.e ?? gridData.bounds.east,
+        west:  gridData.bounds.w ?? gridData.bounds.west,
+    };
+    const data = gridData.data;
+    const latStep = (bounds.north - bounds.south) / height;
+    const lngStep = (bounds.east - bounds.west) / width;
+    const nodata = gridData.nodata ?? -9999;
+
+    const GridCanvasLayer = L.Layer.extend({
+        initialize: function (opts) {
+            this._grid = { width, height, bounds, data, latStep, lngStep, nodata };
+            L.setOptions(this, opts || {});
+            this._raf = null;
+        },
+        onAdd: function (map) {
+            this._map = map;
+            const canvas = (this._canvas = document.createElement('canvas'));
+            canvas.style.cssText = 'pointer-events:none;position:absolute;left:0;top:0;';
+            const pane = map.getPane ? map.getPane('overlayPane') : map.getPanes().overlayPane;
+            if (pane) pane.appendChild(canvas);
+            this._draw();
+            // Use continuous events to avoid visible "scale drift" during zoom animation.
+            // RAF-throttle keeps it affordable.
+            map.on('move zoom zoomanim resize moveend zoomend', this._draw, this);
+        },
+        onRemove: function (map) {
+            map.off('move zoom zoomanim resize moveend zoomend', this._draw, this);
+            if (this._raf) {
+                cancelAnimationFrame(this._raf);
+                this._raf = null;
+            }
+            const pane = map.getPane ? map.getPane('overlayPane') : map.getPanes().overlayPane;
+            if (this._canvas && pane && pane.contains(this._canvas)) {
+                pane.removeChild(this._canvas);
+            }
+            this._canvas = null;
+        },
+        _draw: function () {
+            if (this._raf) return;
+            this._raf = requestAnimationFrame(() => {
+                this._raf = null;
+                this._drawNow();
+            });
+        },
+        _drawNow: function () {
+            const map = this._map;
+            if (!map || !this._canvas) return;
+
+            const size = map.getSize();
+            if (!size || size.x <= 0 || size.y <= 0) return;
+
+            // HiDPI-safe canvas (prevents blur + helps alignment)
+            const dpr = window.devicePixelRatio || 1;
+            const targetW = Math.round(size.x * dpr);
+            const targetH = Math.round(size.y * dpr);
+            if (this._canvas.width !== targetW || this._canvas.height !== targetH) {
+                this._canvas.width = targetW;
+                this._canvas.height = targetH;
+                this._canvas.style.width = size.x + 'px';
+                this._canvas.style.height = size.y + 'px';
+            }
+
+            const ctx = this._canvas.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, size.x, size.y);
+
+            const g = this._grid;
+            const zoom = map.getZoom();
+            const step = zoom < 10 ? 8 : zoom < 12 ? 4 : zoom < 14 ? 2 : 1;
+            const sw = map.getBounds().getSouthWest();
+            const ne = map.getBounds().getNorthEast();
+
+            for (let row = 0; row < g.height; row += step) {
+                for (let col = 0; col < g.width; col += step) {
+                    const val = g.data[row * g.width + col];
+                    if (val == null || val <= 0 || val <= -9998 || val === g.nodata) continue;
+
+                    const cellNorth = g.bounds.north - row * g.latStep;
+                    const cellSouth = g.bounds.north - (row + step) * g.latStep;
+                    const cellWest = g.bounds.west + col * g.lngStep;
+                    const cellEast = g.bounds.west + (col + step) * g.lngStep;
+
+                    if (cellNorth < sw.lat || cellSouth > ne.lat || cellEast < sw.lng || cellWest > ne.lng) continue;
+
+                    const pt1 = map.latLngToContainerPoint(L.latLng(cellSouth, cellWest));
+                    const pt2 = map.latLngToContainerPoint(L.latLng(cellNorth, cellEast));
+
+                    const x = Math.floor(Math.min(pt1.x, pt2.x));
+                    const y = Math.floor(Math.min(pt1.y, pt2.y));
+                    const w = Math.ceil(Math.abs(pt2.x - pt1.x));
+                    const h = Math.ceil(Math.abs(pt2.y - pt1.y));
+
+                    if (w < 1 || h < 1) continue;
+
+                    ctx.fillStyle = 'rgba(239, 68, 68, 0.5)';
+                    ctx.fillRect(x, y, w, h);
+                }
+            }
+        },
+    });
+
+    return new GridCanvasLayer();
+}
 
 /**
- * Xoá toàn bộ flood mask layer cũ khỏi bản đồ
+ * Convert categorical grid (e.g. label) into a PNG dataURL and render via Leaflet ImageOverlay.
+ * This avoids zoom/pan drift and provides smooth zoom animation.
  */
+function createGridImageOverlay(gridData, boundsObj) {
+    const width = gridData.size?.c ?? gridData.width;
+    const height = gridData.size?.r ?? gridData.height;
+    const data = gridData.data;
+    const nodata = gridData.nodata ?? -9999;
+
+    // Create tiny canvas (grid resolution). Browser + Leaflet will scale it smoothly.
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+        // Hard fallback if canvas context fails for any reason
+        return createGridCanvasOverlay(gridData);
+    }
+
+    const img = ctx.createImageData(width, height);
+    const px = img.data;
+
+    // Encode as RGBA:
+    // - flood cell (val > 0) => red with alpha
+    // - otherwise transparent
+    // Note: Image origin is top-left; our grid data is row-major (row 0 = north/top) already.
+    for (let i = 0; i < width * height; i++) {
+        const v = data[i];
+        const o = i * 4;
+        const isFlood = v != null && v !== nodata && v > 0 && v > -9998;
+        if (isFlood) {
+            px[o + 0] = 239; // R
+            px[o + 1] = 68;  // G
+            px[o + 2] = 68;  // B
+            px[o + 3] = 140; // A
+        } else {
+            px[o + 3] = 0;
+        }
+    }
+
+    ctx.putImageData(img, 0, 0);
+    const dataUrl = canvas.toDataURL('image/png');
+
+    const b = boundsObj || {
+        north: gridData.bounds?.n ?? gridData.bounds?.north,
+        south: gridData.bounds?.s ?? gridData.bounds?.south,
+        east: gridData.bounds?.e ?? gridData.bounds?.east,
+        west: gridData.bounds?.w ?? gridData.bounds?.west,
+    };
+
+    return L.imageOverlay(dataUrl, [[b.south, b.west], [b.north, b.east]], {
+        opacity: 0.6,
+        interactive: false,
+        className: 'flood-mask-overlay',
+        zIndex: 400,
+    });
+}
+
 /**
- * Render Grid GeoTIFF layer on map
+ * Render Grid GeoTIFF layer on map (Canvas overlay - scale theo zoom)
  */
 async function renderGridLayer(date, region, layerName) {
     try {
-        const url = `${window.API_BASE_URL || ''}/api/grid/${region}/${date}/${layerName}`;
-        const response = await fetch(url);
-        const envelope = await response.json();
+        const url = `${window.API_BASE_URL || ''}/api/grid/${region}/${date}/${layerName}?format=bin`;
+        const response = await fetchWithRetryTimeout(url, {
+            timeoutMs: 90000, // grid can be large on slow networks
+            retries: 2,
+            backoffMs: 800,
+        });
+        const contentType = response.headers.get('content-type') || '';
 
-        if (!envelope.success) {
-            console.warn(`⚠️ Grid data not available for ${layerName} in ${region} on ${date}`);
-            return;
-        }
-
-        const grid = envelope.data;
-        const { width, height, bounds, data } = grid;
-
-        const latStep = (bounds.north - bounds.south) / height;
-        const lngStep = (bounds.east - bounds.west) / width;
-
-        const layerGroup = L.layerGroup();
-
-        for (let row = 0; row < height; row++) {
-            for (let col = 0; col < width; col++) {
-                const index = row * width + col;
-                const val = data[index];
-
-                let fillColor = null;
-                let fillOpacity = 0.5;
-
-                if (val === null) {
-                    // Mây che / Không có dữ liệu
-                    fillColor = '#cfd8dc'; // Xám nhạt hơn một chút để đỡ rối mắt
-                    fillOpacity = 0.3;     // Mờ hơn một chút
-                } else if (val > 0) {
-                    // Có ngập
-                    fillColor = '#ef4444'; // Đỏ nhạt
-                    fillOpacity = 0.5;
-                } else {
-                    // val === 0 hoặc nhỏ hơn 0 thì bỏ qua (Không ngập)
-                    continue;
-                }
-
-                const cellNorth = bounds.north - (row * latStep);
-                const cellSouth = cellNorth - latStep;
-                const cellWest = bounds.west + (col * lngStep);
-                const cellEast = cellWest + lngStep;
-
-                const rect = L.rectangle(
-                    [[cellSouth, cellWest], [cellNorth, cellEast]],
-                    {
-                        color: fillColor, // border color same as fill
-                        weight: 0,        // No border
-                        fillColor: fillColor,
-                        fillOpacity: fillOpacity,
-                        interactive: false // Không bắt click (để map ở dưới bắt click)
-                    }
-                );
-                layerGroup.addLayer(rect);
+        let grid;
+        if (contentType.includes('octet-stream')) {
+            const buf = await response.arrayBuffer();
+            const view = new DataView(buf);
+            const metaLen = view.getUint32(0, true);
+            const metaStr = new TextDecoder().decode(new Uint8Array(buf, 4, metaLen));
+            grid = JSON.parse(metaStr);
+            grid.data = new Float32Array(buf, 4 + metaLen);
+        } else {
+            const envelope = await response.json();
+            if (!envelope.success) {
+                console.warn(`⚠️ Grid data not available for ${layerName} in ${region} on ${date}`);
+                drawDataBounds(REGION_BOUNDS[region]);
+                return;
             }
+            grid = envelope.data;
         }
+        // API returns compact keys: bounds={n,s,e,w}, size={r,c}
+        const bounds = {
+            north: grid.bounds.n ?? grid.bounds.north,
+            south: grid.bounds.s ?? grid.bounds.south,
+            east:  grid.bounds.e ?? grid.bounds.east,
+            west:  grid.bounds.w ?? grid.bounds.west,
+        };
 
-        layerGroup.addTo(map);
+        // Keep a single bounding box matching actual data extent
+        setDataBoundsRect(bounds);
+
+        // Prefer ImageOverlay for categorical flood mask (smooth zoom, no drift).
+        // Fallback to canvas overlay for other layers.
+        let overlay;
+        if (layerName === 'label') {
+            overlay = createGridImageOverlay(grid, bounds);
+        } else {
+            overlay = createGridCanvasOverlay(grid);
+        }
+        overlay.addTo(map);
+
         window.activeHeatLayers = window.activeHeatLayers || [];
-        window.activeHeatLayers.push(layerGroup);
+        window.activeHeatLayers.push(overlay);
 
     } catch (e) {
         console.error(`❌ Error rendering grid layer ${layerName}:`, e);
+        // Fallback: draw static bounds when grid fetch fails
+        drawDataBounds(REGION_BOUNDS[region]);
     }
 }
 
@@ -670,6 +970,9 @@ function clearLayers() {
         map.removeLayer(heatmapLayer);
         heatmapLayer = null;
     }
+    // Clear Flood Mask PNG overlay (if present)
+    clearFloodMask();
+    clearDataBoundsRect();
     // Clear New Heatmaps
     if (window.activeHeatLayers) {
         window.activeHeatLayers.forEach(l => map.removeLayer(l));
@@ -688,6 +991,23 @@ async function updateHeatmap(date, region, force = false) {
     // 🌍 Update global state immediately so map clicks use correct date
     currentDate = date;
     currentRegion = region;
+    if (typeof window !== 'undefined') {
+        window.currentDate = date;
+        window.currentRegion = region;
+    }
+    // Sync 7-Day Forecast region label (fix: was hardcoded "Ho Chi Minh")
+    const regionLabel = document.getElementById('forecast-region-label');
+    if (regionLabel) {
+        const displayNames = { DaNang: 'Đà Nẵng' };
+        regionLabel.textContent = displayNames[region] || region;
+    }
+
+    // Cancel any pending pixel requests since date/region changed
+    if (_pixelAbortController) {
+        _pixelAbortController.abort();
+        _pixelAbortController = null;
+    }
+    _pendingPixelDate = null;
 
     // --- Lock check ---
     if (isUpdating && !force) {
@@ -699,6 +1019,12 @@ async function updateHeatmap(date, region, force = false) {
     console.log(`🗺️ Updating map for: ${region} / ${date} (rendering all regions)`);
 
     try {
+        // Warm-up stacked GeoTIFF source so first pixel click is fast (no downsampling).
+        // Non-blocking: we don't await this; it just primes backend caches.
+        try {
+            fetch(`${window.API_BASE_URL || ''}/api/warmup/${region}/${date}`).catch(() => {});
+        } catch {}
+
         // 1. Update Availability Logic via LayerManager (for the primary/clicked region)
         if (window.LayerManager) {
             await window.LayerManager.updateAvailability(date, region);
@@ -728,11 +1054,22 @@ async function updateHeatmap(date, region, force = false) {
             const bounds = REGION_BOUNDS[regionName];
             if (!bounds) return;
 
-            // Always draw bounds for the region (static frame)
-            drawDataBounds(bounds);
-
             if (showFlood) {
-                await renderGridLayer(date, regionName, 'label');
+                // Prefer PNG mask overlay for correct zoom scaling + best performance.
+                // Fallback to canvas grid if PNG is not available.
+                const maskOk = await renderFloodMask(regionName, date);
+                if (!maskOk) {
+                    // renderGridLayer draws the bounding box using actual data bounds
+                    await renderGridLayer(date, regionName, 'label');
+                } else {
+                    // If we have a mask, at least align bounds-rect to the same known region extent
+                    // (mask bounds are currently region-level, not per-date).
+                    const b = MASK_BOUNDS[regionName];
+                    if (b) setDataBoundsRect({ south: b[0][0], west: b[0][1], north: b[1][0], east: b[1][1] });
+                }
+            } else {
+                // Fallback: draw static bounds when no grid data is requested
+                setDataBoundsRect(bounds);
             }
         }));
 
@@ -789,7 +1126,56 @@ function initMap() {
     // Add default Leaflet Layer Control (Top Right)
     L.control.layers(baseMaps).addTo(map);
 
-    // --- Add Other Controls & Events ---
+    // --- Expose base layers for toggle button ---
+    window._baseLayers = { osm, cartoLight, esriSatellite };
+    window._currentBaseKey = 'osm'; // tracks which base is active
+
+    // --- Map Style Toggle Button ---
+    const toggleBtn = document.getElementById('map-style-toggle');
+    const toggleThumb = document.getElementById('map-style-thumb');
+    const toggleLabel = document.getElementById('map-style-label');
+
+    // Thumbnail URLs for preview
+    const _thumbSatellite = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/10/460/820';
+    const _thumbStreet = 'https://tile.openstreetmap.org/10/820/460.png';
+
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', function () {
+            const isSatelliteNow = map.hasLayer(esriSatellite);
+
+            if (isSatelliteNow) {
+                // Switch back to street (OSM)
+                map.removeLayer(esriSatellite);
+                map.addLayer(osm);
+                window._currentBaseKey = 'osm';
+                toggleThumb.src = _thumbSatellite;
+                toggleLabel.textContent = 'Vệ tinh';
+                toggleBtn.title = 'Chuyển sang bản đồ vệ tinh';
+            } else {
+                // Switch to satellite — remove whichever street layer is active
+                if (map.hasLayer(osm)) map.removeLayer(osm);
+                if (map.hasLayer(cartoLight)) map.removeLayer(cartoLight);
+                map.addLayer(esriSatellite);
+                window._currentBaseKey = 'esriSatellite';
+                toggleThumb.src = _thumbStreet;
+                toggleLabel.textContent = 'Bản đồ';
+                toggleBtn.title = 'Chuyển sang bản đồ đường';
+            }
+        });
+    }
+
+    // Keep toggle button in sync when user changes layer via the Leaflet control
+    map.on('baselayerchange', function (e) {
+        if (e.layer === esriSatellite) {
+            window._currentBaseKey = 'esriSatellite';
+            if (toggleThumb) toggleThumb.src = _thumbStreet;
+            if (toggleLabel) toggleLabel.textContent = 'Bản đồ';
+        } else {
+            window._currentBaseKey = (e.layer === cartoLight) ? 'cartoLight' : 'osm';
+            if (toggleThumb) toggleThumb.src = _thumbSatellite;
+            if (toggleLabel) toggleLabel.textContent = 'Vệ tinh';
+        }
+    });
 
     // --- Add Other Controls & Events ---
 

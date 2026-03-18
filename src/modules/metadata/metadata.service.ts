@@ -84,24 +84,41 @@ export async function getDates(region: string): Promise<Result<MetadataResponse,
     }
 
     // Strategy 2: Legacy R2 scan (fallback)
-    if (!_loadDateIndex) return Err(AppErrors.internal('Date index loader not configured'));
-
-    try {
-        const index = await _loadDateIndex(region);
-        if (!index) return Err(AppErrors.notFound(`No data for region "${region}"`));
-
-        const elapsed = Date.now() - t0;
-        structuredLog('info', 'metadata_lookup', { region, source: 'r2_scan', durationMs: elapsed });
-        return Ok({
-            region: index.region,
-            dateRange: index.date_range,
-            totalDays: index.total_days,
-            availableDates: index.available_dates,
-            dataSources: { type: index.data_source },
-        });
-    } catch (err) {
-        return Err(AppErrors.internal(`Failed to load dates: ${(err as Error).message}`));
+    if (_loadDateIndex) {
+        try {
+            const index = await _loadDateIndex(region);
+            if (index) {
+                const elapsed = Date.now() - t0;
+                structuredLog('info', 'metadata_lookup', { region, source: 'r2_scan', durationMs: elapsed });
+                return Ok({
+                    region: index.region,
+                    dateRange: index.date_range,
+                    totalDays: index.total_days,
+                    availableDates: index.available_dates,
+                    dataSources: { type: index.data_source },
+                });
+            }
+        } catch {
+            // R2 scan failed — fall through to local NPZ
+        }
     }
+
+    // Strategy 3: Local NPZ file scan (offline fallback)
+    const { listLocalNpzDates } = await import('../../shared/legacy/npz-reader');
+    const localDates = listLocalNpzDates();
+    if (localDates.length > 0) {
+        const elapsed = Date.now() - t0;
+        structuredLog('info', 'metadata_lookup', { region, source: 'local_npz', durationMs: elapsed, totalDays: localDates.length });
+        return Ok({
+            region,
+            dateRange: { start: localDates[0]!, end: localDates[localDates.length - 1]! },
+            totalDays: localDates.length,
+            availableDates: datesToNested(localDates),
+            dataSources: { type: 'local_npz' },
+        });
+    }
+
+    return Err(AppErrors.notFound(`No data for region "${region}"`));
 }
 
 export async function getTimeline(): Promise<Result<{ dates: string[]; dateRange: { start: string; end: string }; totalDays: number; regions: Record<string, boolean> }, AppError>> {

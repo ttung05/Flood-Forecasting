@@ -335,5 +335,38 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # ══════════════════════════════════════════════════════
+  #  ML Inference Service (FastAPI)
+  # ══════════════════════════════════════════════════════
+  # Run with: docker-compose --profile ml up inference-service
+  inference-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    profiles:
+      - ml
+    ports:
+      - "8001:8001"
+    environment:
+      - MODEL_PATH=/app/model/flood_model.pkl
+      - HOST=0.0.0.0
+      - PORT=8001
+      - WORKERS=2
+    volumes:
+      - ./model:/app/model
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
 volumes:
   postgres-db-volume:

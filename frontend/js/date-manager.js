@@ -79,15 +79,9 @@ async function fetchAndSetLatestDate() {
             // Sync display button
             syncDateUI(latestDate);
 
-            // Sync map.js currentDate
-            if (typeof window.currentDate !== 'undefined' || window.currentDate === null) {
-                window.currentDate = latestDate;
-            }
-
-            // Also set the global for map.js (it uses module-level var)
-            if (typeof currentDate !== 'undefined') {
-                // This will be picked up by map.js if it hasn't loaded yet
-            }
+            // Sync global state for map.js and data-panels
+            window.currentDate = latestDate;
+            window.currentRegion = window.currentRegion || 'DaNang';
         }
     } catch (e) {
         console.warn('⚠️ DateManager: Could not auto-detect latest date:', e);

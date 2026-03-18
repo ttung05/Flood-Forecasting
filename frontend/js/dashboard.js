@@ -156,6 +156,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderEDATable();
     if (progress) progress.style.width = '90%';
 
+    // Fetch ML prediction for focus date (non-blocking)
+    fetchAndRenderMlPrediction(state.focusIndex);
+
     // Initialize seasonality (async, non-blocking)
     initSeasonality();
 
@@ -421,6 +424,178 @@ function renderRiskKPIs(idx) {
 }
 
 // ══════════════════════════════════════════════════════
+//  RENDER: ML PREDICTION PANEL
+// ══════════════════════════════════════════════════════
+
+/**
+ * Fetch and render ML flood prediction for the currently focused date.
+ * Called on init and whenever focus changes (click timeline / table row).
+ */
+async function fetchAndRenderMlPrediction(idx) {
+    const row = state.timelineData[idx];
+    if (!row) return;
+
+    // Show loading state
+    const resultCard = $('ml-result-card');
+    const resultRisk = $('ml-result-risk');
+    const resultIcon = $('ml-result-icon');
+    const resultConf = $('ml-result-confidence');
+    if (resultRisk) resultRisk.textContent = '...';
+    if (resultConf) resultConf.textContent = '--%';
+
+    const startMs = performance.now();
+
+    try {
+        const data = await dataLoader.loadMlPrediction(
+            state.lat, state.lng, row.date, state.region
+        );
+        const latencyMs = Math.round(performance.now() - startMs);
+
+        if (data && data.mlPrediction) {
+            renderMlPrediction(data.mlPrediction, latencyMs, row);
+        } else {
+            // Prediction unavailable — show fallback using rule-based from pixel data
+            renderMlFallback(row, latencyMs);
+        }
+    } catch (e) {
+        console.warn('ML prediction rendering failed:', e);
+        renderMlFallback(row, 0);
+    }
+}
+
+/**
+ * Render ML prediction results into the ML panel.
+ * @param {Object} pred - { flood_risk, probability, confidence, model_version, features_used }
+ * @param {number} latencyMs - API call latency
+ * @param {Object} row - timeline data row (for feature display)
+ */
+function renderMlPrediction(pred, latencyMs, row) {
+    const risk = (pred.flood_risk || 'LOW').toUpperCase();
+    const confidence = pred.confidence ?? 0;
+    const probability = pred.probability ?? 0;
+    const modelVersion = pred.model_version || 'unknown';
+
+    const rc = riskColor(risk);
+
+    // Result card
+    const resultCard = $('ml-result-card');
+    if (resultCard) resultCard.className = `flex flex-col items-center justify-center p-6 rounded-xl border-2 ${rc.border} ${rc.bg}`;
+    const resultIcon = $('ml-result-icon');
+    if (resultIcon) { resultIcon.textContent = rc.icon; resultIcon.className = `material-symbols-outlined text-4xl mb-2 ${rc.iconColor}`; }
+    const resultRisk = $('ml-result-risk');
+    if (resultRisk) { resultRisk.textContent = risk; resultRisk.className = `text-3xl font-extrabold uppercase tracking-wide ${rc.text}`; }
+    const resultConf = $('ml-result-confidence');
+    if (resultConf) resultConf.textContent = (confidence * 100).toFixed(0) + '%';
+
+    // Probability bars
+    const probNoFlood = 1 - probability;
+    const probFlood = probability;
+    const barNoFlood = $('ml-bar-noflood');
+    const barFlood = $('ml-bar-flood');
+    const lblNoFlood = $('ml-prob-noflood');
+    const lblFlood = $('ml-prob-flood');
+    if (barNoFlood) barNoFlood.style.width = (probNoFlood * 100).toFixed(1) + '%';
+    if (barFlood) barFlood.style.width = (probFlood * 100).toFixed(1) + '%';
+    if (lblNoFlood) lblNoFlood.textContent = (probNoFlood * 100).toFixed(1) + '%';
+    if (lblFlood) lblFlood.textContent = (probFlood * 100).toFixed(1) + '%';
+
+    // Model badge + latency
+    const modelBadge = $('ml-model-badge');
+    if (modelBadge) {
+        modelBadge.textContent = `Model: ${modelVersion}`;
+        modelBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-600 border-emerald-200';
+    }
+    const latencyBadge = $('ml-latency-badge');
+    if (latencyBadge) latencyBadge.textContent = `${latencyMs} ms`;
+
+    // Feature list
+    const featureList = $('ml-features-list');
+    if (featureList) {
+        const features = [
+            { label: 'Rainfall', value: row.rain?.toFixed(1) + ' mm', icon: 'water_drop' },
+            { label: 'Soil Moisture', value: row.soil?.toFixed(1) + '%', icon: 'grass' },
+            { label: 'Tide', value: (row.tide ?? 0).toFixed(2) + ' m', icon: 'waves' },
+            { label: 'DEM', value: (row.dem ?? 0).toFixed(1) + ' m', icon: 'terrain' },
+            { label: 'Slope', value: (row.slope ?? 0).toFixed(1) + '°', icon: 'landscape' },
+            { label: 'Flow Acc', value: String(row.flow ?? 0), icon: 'route' },
+            { label: 'Land Cover', value: lcLabel(row.landCover), icon: 'forest' },
+        ];
+        featureList.innerHTML = features.map(f => `
+            <div class="flex items-center justify-between py-0.5">
+                <span class="flex items-center gap-1.5 text-slate-600">
+                    <span class="material-symbols-outlined text-xs text-slate-400">${f.icon}</span>
+                    ${f.label}
+                </span>
+                <span class="font-mono font-medium text-slate-800">${f.value}</span>
+            </div>
+        `).join('');
+    }
+
+    // KPI confidence bar (in the flood risk KPI card)
+    const kpiConfBar = $('kpi-confidence-bar');
+    const kpiConfVal = $('kpi-confidence-val');
+    if (kpiConfBar) {
+        const pct = (confidence * 100).toFixed(0);
+        kpiConfBar.style.width = pct + '%';
+        kpiConfBar.style.background = confidence > 0.8 ? '#059669' : confidence > 0.5 ? '#d97706' : '#dc2626';
+    }
+    if (kpiConfVal) kpiConfVal.textContent = 'ML ' + (confidence * 100).toFixed(0) + '%';
+}
+
+/**
+ * Render a fallback when ML service is unavailable.
+ * Shows the rule-based risk from pixel data.
+ */
+function renderMlFallback(row, latencyMs) {
+    const risk = (row.risk || 'LOW').toUpperCase();
+    const rc = riskColor(risk);
+
+    const resultCard = $('ml-result-card');
+    if (resultCard) resultCard.className = `flex flex-col items-center justify-center p-6 rounded-xl border-2 border-slate-200 bg-slate-50`;
+    const resultIcon = $('ml-result-icon');
+    if (resultIcon) { resultIcon.textContent = 'psychology_alt'; resultIcon.className = 'material-symbols-outlined text-4xl mb-2 text-slate-400'; }
+    const resultRisk = $('ml-result-risk');
+    if (resultRisk) { resultRisk.textContent = risk + '*'; resultRisk.className = `text-3xl font-extrabold uppercase tracking-wide text-slate-500`; }
+    const resultConf = $('ml-result-confidence');
+    if (resultConf) resultConf.textContent = 'Rule-based';
+
+    // Clear probability bars
+    const barNoFlood = $('ml-bar-noflood');
+    const barFlood = $('ml-bar-flood');
+    if (barNoFlood) barNoFlood.style.width = '0%';
+    if (barFlood) barFlood.style.width = '0%';
+    const lblNoFlood = $('ml-prob-noflood');
+    const lblFlood = $('ml-prob-flood');
+    if (lblNoFlood) lblNoFlood.textContent = 'N/A';
+    if (lblFlood) lblFlood.textContent = 'N/A';
+
+    // Model badge
+    const modelBadge = $('ml-model-badge');
+    if (modelBadge) {
+        modelBadge.textContent = 'Fallback: Rule-based';
+        modelBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 text-amber-600 border-amber-200';
+    }
+    const latencyBadge = $('ml-latency-badge');
+    if (latencyBadge) latencyBadge.textContent = latencyMs > 0 ? `${latencyMs} ms` : '-- ms';
+
+    // Features still shown from pixel data
+    const featureList = $('ml-features-list');
+    if (featureList) {
+        featureList.innerHTML = `
+            <div class="text-slate-400 text-[11px] italic py-4 text-center">
+                ML service unavailable.<br>Showing rule-based estimation.
+            </div>
+        `;
+    }
+
+    // KPI confidence bar — hide when using fallback
+    const kpiConfBar = $('kpi-confidence-bar');
+    const kpiConfVal = $('kpi-confidence-val');
+    if (kpiConfBar) kpiConfBar.style.width = '0%';
+    if (kpiConfVal) kpiConfVal.textContent = 'N/A';
+}
+
+// ══════════════════════════════════════════════════════
 //  RENDER: 10-DAY TIMELINE CHART
 // ══════════════════════════════════════════════════════
 
@@ -547,6 +722,7 @@ function renderTimelineChart() {
                     renderRiskKPIs(idx);
                     highlightTableRow(idx);
                     updateTimelineHighlight(idx);
+                    fetchAndRenderMlPrediction(idx);
                 }
             }
         }
@@ -598,6 +774,7 @@ function onTableRowClick(idx) {
     renderRiskKPIs(idx);
     renderEDATable();
     updateTimelineHighlight(idx);
+    fetchAndRenderMlPrediction(idx);
 
     // Sync chart tooltip
     if (chartTimeline) {
@@ -656,45 +833,79 @@ async function initSeasonality() {
     const years = [2020, 2021, 2022, 2023, 2024, 2025];
     const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-    // Initialize datasets
+    // Initialize datasets with nulls
     years.forEach(y => { state.seasonalityData[y] = new Array(12).fill(null); });
 
-    // Fetch per-year pixel history (6 API calls) then aggregate daily→monthly totals
-    const yearPromises = years.map(y =>
-        dataLoader.loadPixelHistory(
-            state.lat, state.lng, state.region,
-            `${y}-01-01`, `${y}-12-31`
-        ).catch(() => null)
-    );
+    console.log('📅 Seasonality: Loading monthly rainfall data...');
 
-    const yearResults = await Promise.all(yearPromises);
+    // Show loading indicator on chart area
+    const chartCanvas = $('chart-seasonality');
+    const chartContainer = chartCanvas?.parentElement;
+    let loadingOverlay = null;
+    if (chartContainer) {
+        chartContainer.style.position = 'relative';
+        loadingOverlay = document.createElement('div');
+        loadingOverlay.id = 'seasonality-loading';
+        loadingOverlay.className = 'absolute inset-0 flex items-center justify-center z-10 bg-white/70 rounded-lg';
+        loadingOverlay.innerHTML = `
+            <div class="flex flex-col items-center gap-2">
+                <div class="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-gov-500"></div>
+                <span class="text-xs text-slate-400 font-mono" id="seasonality-loading-text">Loading rainfall data...</span>
+            </div>
+        `;
+        chartContainer.appendChild(loadingOverlay);
+    }
 
-    yearResults.forEach((dailyData, yIdx) => {
-        const year = years[yIdx];
-        if (!dailyData || !Array.isArray(dailyData)) return;
-
-        // Group daily rainfall by month and sum
-        const monthlyTotals = new Array(12).fill(null);
-        const monthlyCounts = new Array(12).fill(0);
-
-        dailyData.forEach(day => {
-            if (day.rainfall === null || day.rainfall === undefined) return;
-            const monthIdx = parseInt(day.date.substring(5, 7), 10) - 1; // 0-indexed
-            if (monthlyTotals[monthIdx] === null) monthlyTotals[monthIdx] = 0;
-            monthlyTotals[monthIdx] += day.rainfall;
-            monthlyCounts[monthIdx]++;
-        });
-
-        state.seasonalityData[year] = monthlyTotals;
-
-        // Log coverage for debugging
-        const monthsWithData = monthlyCounts.filter(c => c > 0).length;
-        console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months with data, ` +
-            `total days=${dailyData.length}, days with rain=${monthlyCounts.reduce((a,b) => a+b, 0)}`);
-    });
-
-    // Render chart
+    // Render empty chart immediately — will update progressively
     renderSeasonalityChart(MONTH_LABELS, years);
+
+    // Load years sequentially via monthly endpoint (sampled — ~8 dates/month).
+    // Each year takes ~10-15s cold, ~1s cached. Progressive chart update after each.
+    let loadedCount = 0;
+
+    for (const year of years) {
+        const loadingText = $('seasonality-loading-text');
+        if (loadingText) loadingText.textContent = `Loading ${year}... (${loadedCount + 1}/${years.length})`;
+
+        try {
+            // Try monthly endpoint for this single year
+            const monthlyData = await dataLoader.loadMonthlyRainfall(
+                state.lat, state.lng, state.region, [year]
+            );
+
+            if (monthlyData && monthlyData[String(year)]) {
+                state.seasonalityData[year] = monthlyData[String(year)];
+                const monthsWithData = monthlyData[String(year)].filter(v => v !== null).length;
+                console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months (monthly endpoint)`);
+            } else {
+                console.warn(`📅 Seasonality ${year}: monthly endpoint returned no data`);
+            }
+        } catch (e) {
+            console.warn(`📅 Seasonality ${year}: monthly endpoint failed — ${e.message || e}`);
+        }
+
+        loadedCount++;
+
+        // Progressive chart update after each year
+        if (chartSeasonality) {
+            chartSeasonality.data.datasets.forEach((ds, idx) => {
+                const y = years[idx];
+                if (y !== undefined && state.seasonalityData[y]) {
+                    ds.data = [...state.seasonalityData[y]];
+                }
+            });
+            chartSeasonality.update('none');
+        }
+    }
+
+    // Remove loading overlay with fade
+    if (loadingOverlay) {
+        loadingOverlay.style.transition = 'opacity 0.4s';
+        loadingOverlay.style.opacity = '0';
+        setTimeout(() => loadingOverlay.remove(), 400);
+    }
+
+    console.log('✅ Seasonality chart fully loaded');
 }
 
 function renderSeasonalityChart(monthLabels, years) {

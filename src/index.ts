@@ -2,7 +2,13 @@
  * Application Entry Point
  * 100% TypeScript, No api/ directory legacy
  */
-import 'dotenv/config';
+import path from 'path';
+import dotenv from 'dotenv';
+
+// Load .env from project root (folder containing package.json). When run from dist/, __dirname is dist/ so .env is ../.env
+const projectRoot = path.resolve(__dirname, '..');
+dotenv.config({ path: path.join(projectRoot, '.env') });
+
 import app from './app';
 import { loadEnv } from './shared/config/env';
 import { structuredLog } from './shared/middleware/tracing';
@@ -21,13 +27,25 @@ structuredLog('info', 'ts_bootstrap', {
     port: env.PORT,
     useWorkerPool: env.USE_WORKER_POOL,
     usePrebuiltGrid: env.USE_PREBUILT_GRID,
+    // Range request is supported via:
+    // - Public URL (fastest, no signing)
+    // - Presigned URL fallback (automatic, still supports HTTP Range)
+    r2Mode: env.R2_PUBLIC_URL ? 'range_request_public' : 'range_request_presigned',
 });
+
+if (!env.R2_PUBLIC_URL) {
+    structuredLog('info', 'r2_public_url_missing', {
+        hint: 'R2_PUBLIC_URL is optional. Backend will use presigned URLs for HTTP Range requests automatically.',
+        recommendation: 'Set R2_PUBLIC_URL for best performance (public URL avoids signing and can reduce overhead).',
+    });
+}
 
 // ── Dependency Injection (Ngắt kết nối api.js cũ) ─────────────────────────
 injectPixelDeps({
     getCachedTifImage: legacyR2.getCachedTifImage,
     readPixelFromR2Tif: legacyR2.readPixelFromR2Tif,
-    tifKey: legacyR2.tifKey as any
+    tifKey: legacyR2.tifKey as any,
+    readStackedPixel: legacyR2.readStackedPixel,
 });
 
 injectMetadataDeps({
@@ -37,7 +55,9 @@ injectMetadataDeps({
 
 injectGridDeps({
     r2GetJson: legacyR2.r2GetJson,
-    legacyGridHandler: async () => null // Bỏ qua legacy vì đã pre-build
+    r2GetBuffer: legacyR2.r2GetBuffer,
+    tifKey: legacyR2.tifKey,
+    getCachedTifImage: legacyR2.getCachedTifImage,
 });
 
 // ── Worker Pool (Tối ưu giải nén TIFF) ──────────────────────────────────────

@@ -14,7 +14,7 @@ export type GridParams = z.infer<typeof GridParamsSchema>;
 
 /**
  * Pre-built grid JSON format (created by pipeline, stored in R2).
- * Compact: integer-scaled values in flat row-major array.
+ * Compact: flat row-major array. Uses Float32Array for efficiency (bin path).
  */
 export interface GridJSON {
     v: number;
@@ -25,5 +25,5 @@ export interface GridJSON {
     size: { r: number; c: number };
     scale: number;
     nodata: number;
-    data: number[];
+    data: number[] | Float32Array;
 }

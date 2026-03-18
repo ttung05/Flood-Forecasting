@@ -7,6 +7,7 @@ import { Ok, Err, AppErrors } from '../../shared/types/result';
 import * as metadataService from '../metadata/metadata.service';
 import * as gridService from '../grid/grid.service';
 import { structuredLog } from '../../shared/middleware/tracing';
+import { getLocalRainfallTotal } from '../../shared/legacy/npz-reader';
 
 import { Region } from '../../shared/types/common';
 
@@ -35,41 +36,46 @@ export async function getRainfallTrend(region: string, targetDate: string): Prom
 
     // 2. Filter dates up to targetDate and get the last 7
     const pastDates = availableDates.filter(d => d <= targetDate);
-    const selectedDates = pastDates.slice(-7); // take last 7
+    const selectedDates = pastDates.slice(-7);
 
-    // If no past dates...
     if (selectedDates.length === 0) {
         return Ok([]);
     }
 
-    // 3. Fetch Grid JSON for 'rain' layer for these 7 dates in parallel
-    const trendData: { date: string; total: number }[] = [];
-
+    // 3. Fetch rainfall totals: try Grid JSON first, fall back to local NPZ
     const fetchPromises = selectedDates.map(async (dateStr) => {
+        // Strategy A: Grid JSON from R2
         const gridResult = await gridService.getGrid({ region: region as 'DaNang', date: dateStr, layer: 'rain' });
 
-        let dailyTotal = 0;
         if (gridResult.ok && gridResult.value && gridResult.value.data) {
             const dataArr = gridResult.value.data;
             const nodata = gridResult.value.nodata ?? -9999;
             const scale = gridResult.value.scale ?? 1;
 
             let sum = 0;
+            let count = 0;
             for (let i = 0; i < dataArr.length; i++) {
                 const val = dataArr[i];
                 if (val !== undefined && val !== null && val !== nodata && val >= 0) {
                     sum += val * scale;
+                    count++;
                 }
             }
-            dailyTotal = sum;
+            const avg = count > 0 ? sum / count : 0;
+            return { date: dateStr, total: parseFloat(avg.toFixed(2)) };
         }
 
-        return { date: dateStr, total: dailyTotal };
+        // Strategy B: Local NPZ fallback
+        const localTotal = await getLocalRainfallTotal(dateStr, region);
+        if (localTotal !== null) {
+            structuredLog('info', 'rainfall_trend_local_npz', { date: dateStr, total: localTotal });
+            return { date: dateStr, total: localTotal };
+        }
+
+        return { date: dateStr, total: 0 };
     });
 
     const results = await Promise.all(fetchPromises);
-
-    // Sort array by date chronologically
     results.sort((a, b) => a.date.localeCompare(b.date));
 
     structuredLog('info', 'forecast_rainfall_trend', { region, targetDate, days: results.length, durationMs: Date.now() - t0 });

@@ -4,8 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pixel Analytics Dashboard (Heatmap Data Stack) - Vietnam Flood Prediction</title>
-    <!-- Tailwind CSS -->
+    <title>Region EDA - Grid Analytics (Heatmaps) - Vietnam Flood Prediction</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -18,15 +17,45 @@
     </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-    <!-- Leaflet & GeoRaster for Native Resolution -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/georaster"></script>
-    <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chroma-js/2.4.2/chroma.min.js"></script>
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
+    
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <!-- jQuery & DataTables JS -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+    
     <style>
-        body {
-            font-family: 'Inter', sans-serif;
+        body { font-family: 'Inter', sans-serif; }
+        .eda-skeleton {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-height: 350px; background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 8px;
+        }
+        @keyframes eda-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        .eda-shimmer-bar {
+            height: 6px; border-radius: 3px;
+            background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+            background-size: 200% 100%;
+            animation: eda-shimmer 1.5s ease-in-out infinite;
+        }
+        .eda-section-header { cursor: pointer; user-select: none; }
+        .eda-section-body { transition: max-height 0.3s ease, opacity 0.2s ease; overflow: hidden; }
+        .eda-section-body.collapsed { max-height: 0 !important; opacity: 0; }
+        .eda-toast {
+            position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+            padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: eda-toast-in 0.3s ease;
+        }
+        @keyframes eda-toast-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
@@ -54,15 +83,21 @@
                 <span id="nav-clock" class="font-mono mt-0.5">00:00:00 UTC+7</span>
             </div>
             <div class="flex items-center gap-2">
+                <div id="nav-region"
+                    class="bg-slate-100 text-slate-700 flex items-center gap-1 px-3 py-1.5 rounded text-[12px] font-bold border border-slate-200">
+                    <span class="material-icons text-[14px]">place</span>
+                    <span>DaNang</span>
+                </div>
                 <div
                     class="bg-blue-600 text-white flex items-center gap-2 px-3 py-1.5 rounded text-[12px] font-bold cursor-pointer hover:bg-blue-700 transition shadow-sm">
-                    <span id="nav-date">17/01/2026</span>
+                    <span id="nav-date">--</span>
                     <span class="material-icons text-[14px]">calendar_today</span>
                 </div>
-                <!-- Clean inputs -->
-                <input type="text" placeholder="DD/MM/YYYY"
-                    class="border border-slate-300 rounded px-3 py-1.5 text-[12px] w-[100px] outline-none focus:border-blue-500 text-slate-700">
-                <button
+                <select id="date-select"
+                    class="border border-slate-300 rounded px-2 py-1.5 text-[12px] outline-none focus:border-blue-500 text-slate-700 bg-white">
+                    <option value="">Loading dates...</option>
+                </select>
+                <button id="btn-go"
                     class="bg-emerald-600 hover:bg-emerald-700 shadow-sm text-white px-4 py-1.4 rounded text-[12px] font-bold transition h-[32px]">Go</button>
             </div>
             <div class="h-8 w-8 rounded-full bg-slate-200 border border-slate-300 overflow-hidden cursor-pointer ml-2">
@@ -78,229 +113,246 @@
         <div class="flex justify-between items-end mb-6">
             <div>
                 <h2 class="text-[22px] font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                    <span class="material-icons text-blue-600 text-[26px]">grid_on</span> Grid Analytics (Plotly 2D
-                    Arrays)
+                    <span class="material-icons text-blue-600 text-[26px]">grid_on</span> Region EDA — Grid Heatmap
+                    Analytics
                 </h2>
-                <p class="text-slate-500 text-[13px] mt-1.5">Phân tích mảng dữ liệu 2D (Heatmaps) thay thế GIS Map. Khối
-                    Đà Nẵng: 100x100 resolution.</p>
+                <p class="text-slate-500 text-[13px] mt-1.5">Phân tích mảng dữ liệu 2D (Heatmaps) từ GeoTIFF.
+                    Region: <strong id="header-region">DaNang</strong> | Date: <strong
+                        id="header-date">--</strong></p>
             </div>
-            <a href="/index.html"
-                class="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg shadow-sm hover:text-blue-600 transition font-semibold text-[13px]">
-                <span class="material-icons text-[18px]">arrow_back</span> Trở lại Dashboard Vùng
-            </a>
+            <div class="flex items-center gap-2">
+                <button id="btn-expand-all" class="flex items-center gap-1 px-3 py-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 text-[12px] font-medium transition">
+                    <span class="material-icons text-[16px]">unfold_more</span> Mở tất cả
+                </button>
+                <button id="btn-collapse-all" class="flex items-center gap-1 px-3 py-1.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 text-[12px] font-medium transition">
+                    <span class="material-icons text-[16px]">unfold_less</span> Thu gọn tất cả
+                </button>
+                <a href="/index.html"
+                    class="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg shadow-sm hover:text-blue-600 transition font-semibold text-[13px]">
+                    <span class="material-icons text-[18px]">arrow_back</span> Trở lại Dashboard Vùng
+                </a>
+            </div>
         </div>
 
-        <div class="space-y-8 pb-10">
-            <!-- COMMON COMPONENT TEMPLATE USED REPEATEDLY -->
+        <!-- Progress Bar -->
+        <div id="progress-bar-wrap" class="hidden mb-4">
+            <div class="flex justify-between text-[12px] text-slate-600 mb-1">
+                <span id="progress-text">Đang tải 0/8 layers...</span>
+                <span id="progress-pct">0%</span>
+            </div>
+            <div class="h-2 bg-slate-200 rounded-full overflow-hidden">
+                <div id="progress-fill" class="h-full bg-blue-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
 
-            <!-- 1. DEM Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
-                <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
+        <div class="space-y-6 pb-10" id="plots-container">
+
+            <!-- 1. DEM -->
+            <section data-layer="dem" class="eda-section bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+                <div class="eda-section-header px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between flex-wrap gap-2">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-emerald-600 text-[18px]">terrain</span>
-                        <span>Digital Elevation Model - Độ Cao Bề Mặt (m)</span>
+                        <span>Digital Elevation Model — Độ Cao Bề Mặt (m)</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="stats-badge text-[11px] text-slate-400 hidden"></span>
+                        <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
+                        <span class="material-icons eda-collapse-icon text-slate-400 transition-transform">expand_more</span>
                     </div>
                 </div>
+                <div class="eda-section-body">
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-dem" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#f4f7fb] border border-blue-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-blue-800 tracking-widest shrink-0 bg-blue-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction DEM
+                    <div id="plot-dem" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="dem">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-emerald-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-dem" class="font-mono text-blue-600 font-bold text-[14px]">Click heatmap
-                                    &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Elevation Bề mặt:</span><span
-                                    id="val-dem" class="font-mono text-slate-800 font-bold text-[15px]">--</span> <span
-                                    class="text-[12px] text-slate-400">m</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Value:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
                         </div>
+                        <button class="btn-copy-extract hidden inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 text-[11px] font-medium transition" title="Copy value">
+                            <span class="material-icons text-[14px]">content_copy</span> Copy
+                        </button>
                     </div>
+                </div>
                 </div>
             </section>
 
-            <!-- 2. FLOOD Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
-                <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
+            <!-- 2. Flood Label -->
+            <section data-layer="label" class="eda-section bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+                <div class="eda-section-header px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between flex-wrap gap-2">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-red-500 text-[18px]">warning_amber</span>
-                        <span>Flood Category Label (Base Mapping)</span>
+                        <span>Flood Category Label (Nhãn Ngập)</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="stats-badge text-[11px] text-slate-400 hidden"></span>
+                        <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
+                        <span class="material-icons eda-collapse-icon text-slate-400 transition-transform">expand_more</span>
                     </div>
                 </div>
+                <div class="eda-section-body">
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-flood" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#fcf9f9] border border-red-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-red-800 tracking-widest shrink-0 bg-red-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction FLOOD
+                    <div id="plot-label" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="label">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-red-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-flood" class="font-mono text-red-600 font-bold text-[14px]">Click heatmap
-                                    &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Trạng Thái Ngập:</span><span
-                                    id="val-flood" class="font-mono text-slate-800 font-bold text-[14px]">--</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Flood Status:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
                         </div>
                     </div>
+                </div>
                 </div>
             </section>
 
-            <!-- 3. FLOW ACC Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+            <!-- 3. Flow Accumulation -->
+            <section data-layer="flow" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-indigo-500 text-[18px]">waves</span>
-                        <span>Flow Accumulation Log Scale</span>
+                        <span>Flow Accumulation (Tích Lũy Dòng Chảy)</span>
                     </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
                 </div>
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-flow" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#f4f6fb] border border-indigo-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-indigo-800 tracking-widest shrink-0 bg-indigo-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction FLOW
+                    <div id="plot-flow" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="flow">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-indigo-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-flow" class="font-mono text-indigo-600 font-bold text-[14px]">Click
-                                    heatmap &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Tích lũy dòng:</span><span
-                                    id="val-flow" class="font-mono text-slate-800 font-bold text-[15px]">--</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Value:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <!-- 4. LULC Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+            <!-- 4. Land Cover -->
+            <section data-layer="landCover" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-amber-500 text-[18px]">forest</span>
-                        <span>Land Use / Land Cover (LULC) Classification</span>
+                        <span>Land Use / Land Cover (LULC)</span>
                     </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
                 </div>
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-lc" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#fcfaf4] border border-amber-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-amber-800 tracking-widest shrink-0 bg-amber-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction LULC
+                    <div id="plot-landCover" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="landCover">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-amber-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-lc" class="font-mono text-amber-600 font-bold text-[14px]">Click heatmap
-                                    &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Lớp Thảm Phủ:</span><span
-                                    id="val-lc" class="font-mono text-slate-800 font-bold text-[14px]">--</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Land Class:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <!-- 5. RAINFALL Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+            <!-- 5. Rainfall -->
+            <section data-layer="rain" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-sky-500 text-[18px]">invert_colors</span>
-                        <span>Precipitation (Rainfall 24h Accumulated)</span>
+                        <span>Precipitation — Lượng Mưa 24h (mm)</span>
                     </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
                 </div>
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-rain" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#f4f9fc] border border-sky-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-sky-800 tracking-widest shrink-0 bg-sky-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction RAIN
+                    <div id="plot-rain" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="rain">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-sky-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-rain" class="font-mono text-sky-600 font-bold text-[14px]">Click heatmap
-                                    &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Lượng Mưa 24h:</span><span
-                                    id="val-rain" class="font-mono text-slate-800 font-bold text-[15px]">--</span> <span
-                                    class="text-[12px] text-slate-400">mm</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Rainfall:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
+                            <span class="text-[11px] text-slate-400">mm</span>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <!-- 6. SOIL MOISTURE Plot -->
-            <section class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+            <!-- 6. Soil Moisture -->
+            <section data-layer="soilMoisture" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
                 <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
                     <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
                         <span class="material-icons text-orange-500 text-[18px]">grass</span>
-                        <span>Soil Moisture Surface Level (Volumetric)</span>
+                        <span>Soil Moisture — Độ Ẩm Đất (Vol%)</span>
                     </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
                 </div>
                 <div class="p-5">
-                    <div class="border border-slate-100 rounded bg-white shadow-[inset_0_0_10px_rgba(0,0,0,0.02)] p-2">
-                        <div id="plot-soil" class="w-full h-[350px] lg:h-[400px]"></div>
-                    </div>
-                    <div
-                        class="mt-4 bg-[#fbf6f2] border border-orange-100 rounded-lg p-4 flex flex-col md:flex-row gap-4 lg:gap-8 md:items-center">
-                        <div
-                            class="flex items-center gap-2 text-[12px] uppercase font-bold text-orange-800 tracking-widest shrink-0 bg-orange-100 px-3 py-1.5 rounded-full">
-                            <span class="material-icons text-[14px]">memory</span> Extraction SOIL
+                    <div id="plot-soilMoisture" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="soilMoisture">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-orange-600 font-bold">Click heatmap ↑</span>
                         </div>
-                        <div class="flex flex-wrap gap-3 flex-1">
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Toạ độ Lat, Lng:</span><span
-                                    id="coord-soil" class="font-mono text-orange-600 font-bold text-[14px]">Click
-                                    heatmap &uarr;</span>
-                            </div>
-                            <div
-                                class="flex items-center gap-3 bg-white px-4 py-2 rounded-xl shadow-sm border border-[#e2e8f0]">
-                                <span class="text-slate-400 font-semibold text-[13px]">Độ ẩm Thể tích:</span><span
-                                    id="val-soil" class="font-mono text-slate-800 font-bold text-[15px]">--</span> <span
-                                    class="text-[12px] text-slate-400">Vol%</span>
-                            </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Soil Moisture:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
+                            <span class="text-[11px] text-slate-400">Vol%</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 7. Tide Level -->
+            <section data-layer="tide" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
+                        <span class="material-icons text-cyan-500 text-[18px]">sailing</span>
+                        <span>Tide Level — Mực Thủy Triều (m)</span>
+                    </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
+                </div>
+                <div class="p-5">
+                    <div id="plot-tide" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="tide">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-cyan-600 font-bold">Click heatmap ↑</span>
+                        </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Tide:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
+                            <span class="text-[11px] text-slate-400">m</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 8. Slope -->
+            <section data-layer="slope" class="bg-white rounded-[12px] shadow-sm border border-slate-200 overflow-hidden">
+                <div class="px-5 py-3.5 border-b border-slate-100 bg-[#fafafa] flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-slate-800 font-bold text-[14px]">
+                        <span class="material-icons text-rose-500 text-[18px]">signal_cellular_alt</span>
+                        <span>Slope — Độ Dốc (°)</span>
+                    </div>
+                    <span class="status-badge text-[11px] text-slate-400 font-medium"></span>
+                </div>
+                <div class="p-5">
+                    <div id="plot-slope" class="w-full"></div>
+                    <div class="mt-3 flex flex-wrap gap-3 extract-panel" data-layer="slope">
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Row, Col:</span>
+                            <span class="extract-coord font-mono text-rose-600 font-bold">Click heatmap ↑</span>
+                        </div>
+                        <div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 text-[12px]">
+                            <span class="text-slate-400 font-semibold">Slope:</span>
+                            <span class="extract-val font-mono text-slate-800 font-bold">--</span>
+                            <span class="text-[11px] text-slate-400">°</span>
                         </div>
                     </div>
                 </div>
@@ -309,8 +361,87 @@
         </div>
     </div>
 
-    <!-- Logic JS -->
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2"></div>
+
+    <!-- Data Tables Section (Added via Implementation Plan) -->
+    <div class="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 mb-8 mt-4 border-t border-slate-200">
+        <h2 class="text-[22px] font-bold text-slate-800 tracking-tight flex items-center gap-2 mb-2">
+            <span class="material-icons text-blue-600 text-[26px]">table_chart</span> Interactive Data Tables Analytics
+        </h2>
+        <p class="text-slate-500 text-[13px] mb-6">Bảng dữ liệu phân tích chi tiết. Hỗ trợ sắp xếp (Sort), tìm kiếm (Filter) và xuất dữ liệu (Export).</p>
+        
+        <!-- Table Tabs (Bootstrap/Tailwind hybrid) -->
+        <div class="flex gap-2 border-b border-slate-200 mb-6 font-medium text-[13px] overflow-x-auto pb-2" id="eda-table-tabs">
+            <button class="px-4 py-2 text-blue-600 border-b-2 border-blue-600 font-bold whitespace-nowrap" data-target="tab-summary">Summary Stats</button>
+            <button class="px-4 py-2 text-slate-500 hover:text-slate-800 whitespace-nowrap" data-target="tab-percentiles">Percentiles</button>
+            <button class="px-4 py-2 text-slate-500 hover:text-slate-800 whitespace-nowrap" data-target="tab-correlation">Correlation Matrix</button>
+            <button class="px-4 py-2 text-slate-500 hover:text-slate-800 whitespace-nowrap" data-target="tab-categorical">Categorical Distribution</button>
+            <button class="px-4 py-2 text-slate-500 hover:text-slate-800 whitespace-nowrap" data-target="tab-anomalies">Top Anomalies</button>
+        </div>
+
+        <!-- Tab Contents -->
+        <!-- 1. Summary -->
+        <div id="tab-summary" class="eda-tab-content block overflow-hidden bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+            <table id="table-summary" class="display w-full text-[13px] text-slate-800">
+                <thead class="bg-slate-50"><tr><th>Layer</th><th>Min</th><th>Max</th><th>Mean</th><th>Median</th><th>Std Dev</th><th>Valid Pixels</th><th>Missing</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        
+        <!-- 2. Percentiles -->
+        <div id="tab-percentiles" class="eda-tab-content hidden overflow-hidden bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+            <table id="table-percentiles" class="display w-full text-[13px] text-slate-800">
+                <thead class="bg-slate-50"><tr><th>Layer</th><th>Min</th><th>25% (Q1)</th><th>50% (Median)</th><th>75% (Q3)</th><th>90%</th><th>95%</th><th>99%</th><th>Max</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <!-- 3. Correlation -->
+        <div id="tab-correlation" class="eda-tab-content hidden overflow-hidden bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+            <table id="table-correlation" class="display w-full text-[13px] text-slate-800">
+                <thead class="bg-slate-50" id="thead-correlation"><tr><th>Layer</th><!-- dynamic --></tr></thead>
+                <tbody id="tbody-correlation"></tbody>
+            </table>
+        </div>
+
+        <!-- 4. Categorical -->
+        <div id="tab-categorical" class="eda-tab-content hidden overflow-hidden bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="font-bold text-[14px] text-slate-800 mb-3"><span class="material-icons text-amber-500 text-[16px] align-middle">forest</span> LULC Distribution</h3>
+                    <table id="table-cat-lulc" class="display w-full text-[13px] text-slate-800">
+                        <thead class="bg-slate-50"><tr><th>Class</th><th>Pixel Count</th><th>Area (%)</th></tr></thead><tbody></tbody>
+                    </table>
+                </div>
+                <div>
+                    <h3 class="font-bold text-[14px] text-slate-800 mb-3"><span class="material-icons text-red-500 text-[16px] align-middle">warning_amber</span> Flood Label Distribution</h3>
+                    <table id="table-cat-flood" class="display w-full text-[13px] text-slate-800">
+                        <thead class="bg-slate-50"><tr><th>Label</th><th>Pixel Count</th><th>Area (%)</th></tr></thead><tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. Anomalies -->
+        <div id="tab-anomalies" class="eda-tab-content hidden overflow-hidden bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+            <table id="table-anomalies" class="display w-full text-[13px] text-slate-800">
+                <thead class="bg-slate-50"><tr><th>Row,Col</th><th>Latitude</th><th>Longitude</th><th>Rain (mm)</th><th>DEM (m)</th><th>Tide (m)</th><th>Flow</th><th>Flood Lbl</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-200 bg-white py-3 px-6 mt-auto">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+            <span id="footer-meta">Data: GeoTIFF / NPZ · API: Grid binary format · Region: DaNang</span>
+            <span id="footer-load-time"></span>
+        </div>
+    </footer>
+
     <script src="/js/eda.js"></script>
+    <script src="/js/eda-tables.js"></script>
 </body>
 
 </html>

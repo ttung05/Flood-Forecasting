@@ -115,14 +115,16 @@ function formatTimelineDate(dateStr) {
 }
 
 function updateTimelineExternal(dateStr) {
+    const region = window.currentRegion || 'DaNang';
     const idx = timelineDates.indexOf(dateStr);
     if (idx >= 0) {
         currentDateIndex = idx;
         const slider = document.getElementById('timeline-slider');
         if (slider) slider.value = idx;
         updateTimelineCurrentDateUI();
-        updateRainfallTrend(dateStr, window.currentRegion || 'DaNang');
     }
+    // Always update rainfall trend for selected date (API accepts any date)
+    if (dateStr) updateRainfallTrend(dateStr, region);
 }
 
 if (typeof window !== 'undefined') {
@@ -177,7 +179,7 @@ async function updateRainfallTrend(dateStr, region) {
                 data: {
                     labels,
                     datasets: [{
-                        label: 'Total Rainfall (mm)',
+                        label: 'Avg Rainfall (mm)',
                         data,
                         backgroundColor: colors,
                         borderRadius: 4
@@ -191,7 +193,7 @@ async function updateRainfallTrend(dateStr, region) {
                         tooltip: {
                             callbacks: {
                                 label: function (context) {
-                                    return `Total: ${Number(context.raw).toLocaleString()} mm`;
+                                    return `Avg: ${Number(context.raw).toLocaleString()} mm`;
                                 }
                             }
                         }

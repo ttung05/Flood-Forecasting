@@ -55,3 +55,10 @@ dist
 .env.*
 !.env.example
 data/
+
+# Model and Temp Files
+*.pth
+*.bin
+debug-r2.json
+list-r2.ts
+output.txt
