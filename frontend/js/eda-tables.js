@@ -5,35 +5,7 @@
 
 // ── Globals & UI ──
 let dataTables = {};
-
-document.addEventListener('DOMContentLoaded', () => {
-    // Tab switching logic
-    const tabs = document.querySelectorAll('#eda-table-tabs button');
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            // Reset active states
-            tabs.forEach(t => {
-                t.classList.remove('text-blue-600', 'border-b-2', 'border-blue-600', 'font-bold');
-                t.classList.add('text-slate-500');
-            });
-            // Set active state
-            tab.classList.add('text-blue-600', 'border-b-2', 'border-blue-600', 'font-bold');
-            tab.classList.remove('text-slate-500');
-
-            // Show target
-            const targetId = tab.dataset.target;
-            document.querySelectorAll('.eda-tab-content').forEach(c => {
-                c.classList.add('hidden');
-                c.classList.remove('block');
-            });
-            document.getElementById(targetId).classList.remove('hidden');
-            document.getElementById(targetId).classList.add('block');
-
-            // Force DataTables to adjust column widths on tab reveal
-            Object.values(dataTables).forEach(dt => dt.columns.adjust());
-        });
-    });
-});
+window.edaDataTables = dataTables;
 
 document.addEventListener('edaDataLoaded', () => {
     console.log('[EDA Tables] Data loaded triggered. Computing table analytics...');
@@ -190,10 +162,10 @@ function computeAndRenderTables() {
                     anomaliesFound.push({
                         idx, r, c, lat, lng, 
                         isFlood: isFlood ? "Yes (1)" : "No (0)",
-                        rain: rainVal > -999 ? rainVal.toFixed(2) : "N/A",
-                        dem: demV != null && demV > -999 ? demV.toFixed(2) : "N/A",
-                        tide: tideV != null && tideV > -999 ? tideV.toFixed(2) : "N/A",
-                        flow: flowV != null && flowV > -999 ? flowV.toFixed(0) : "N/A"
+                        rain: rainVal > -999 ? rainVal.toFixed(2) : "nodata",
+                        dem: demV != null && demV > -999 ? demV.toFixed(2) : "nodata",
+                        tide: tideV != null && tideV > -999 ? tideV.toFixed(2) : "nodata",
+                        flow: flowV != null && flowV > -999 ? flowV.toFixed(0) : "nodata"
                     });
                 }
             }
@@ -240,7 +212,7 @@ function computeAndRenderTables() {
     const tbodyCorr = document.getElementById('tbody-correlation');
     tbodyCorr.innerHTML = corrData.map(r => `<tr>${r.map((c, i) => {
         if (i===0) return `<td class="font-bold whitespace-nowrap">${c}</td>`;
-        if (c === "N/A" || typeof c !== "number" || isNaN(c)) return `<td class="text-center text-slate-400 font-mono">N/A</td>`;
+        if (c === "nodata" || c === "N/A" || typeof c !== "number" || isNaN(c)) return `<td class="text-center text-slate-400 font-mono">nodata</td>`;
         
         const v = parseFloat(c);
         let bgStyle = '';
@@ -272,7 +244,8 @@ function computeAndRenderTables() {
     dataTables.anomalies = $('#table-anomalies').DataTable({ ...dtOptions, order: [[3, 'desc']] });
 
     // Adjust columns on first init since tabs might hide them
-    setTimeout(() => { Object.values(dataTables).forEach(dt => dt.columns.adjust()); }, 100);
+    setTimeout(() => { Object.values(dataTables).forEach(dt => dt.columns && dt.columns.adjust()); }, 200);
+    window.edaDataTables = dataTables;
     } catch (err) {
         console.error("DataTables Rendering Error:", err);
         if (typeof toast === 'function') toast("Lỗi xử lý bảng dữ liệu: " + err.message, "error");
@@ -281,7 +254,7 @@ function computeAndRenderTables() {
 
 // Helper: Calculate Pearson Correlation between two grid arrays
 function getPearson(gridA, gridB) {
-    if (!gridA || !gridB) return "N/A";
+    if (!gridA || !gridB) return "nodata";
     const dataA = gridA.data, dataB = gridB.data;
     const nodataA = gridA.nodata ?? -9999, nodataB = gridB.nodata ?? -9999;
     const sA = gridA.scale||1, sB = gridB.scale||1;
@@ -302,7 +275,7 @@ function getPearson(gridA, gridB) {
         count++;
     }
     
-    if (count === 0) return "N/A";
+    if (count === 0) return "nodata";
     
     const num = count * sumAB - sumA * sumB;
     const den = Math.sqrt((count * sumA2 - sumA * sumA) * (count * sumB2 - sumB * sumB));

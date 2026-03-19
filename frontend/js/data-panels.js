@@ -134,9 +134,63 @@ if (typeof window !== 'undefined') {
 // --- TREND CHARTS (Dashboard Page) ---
 let trendChartInstance = null;
 
+function getRiskFromRain(totalRain) {
+    if (totalRain >= 80) return 'HIGH';
+    if (totalRain >= 30) return 'MEDIUM';
+    return 'LOW';
+}
+
+function formatForecastLabel(dateStr, baseDateStr) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
+    const short = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+    return dateStr === baseDateStr ? `${short} (Today)` : short;
+}
+
+function renderForecastList(trends, baseDateStr) {
+    const list = document.getElementById('forecast-list');
+    if (!list) return;
+
+    if (!Array.isArray(trends) || trends.length === 0) {
+        list.innerHTML = `
+            <div class="relative">
+                <div class="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-slate-300 border-2 border-white dark:border-slate-900"></div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium text-slate-600 dark:text-slate-400">No forecast data</span>
+                    <span class="text-xs font-bold text-slate-500 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded">nodata</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-0.5">API chua tra du lieu du bao</p>
+            </div>
+        `;
+        return;
+    }
+
+    list.innerHTML = trends.slice(0, 7).map((item) => {
+        const rain = Number(item.total || 0);
+        const risk = getRiskFromRain(rain);
+        const riskStyles = {
+            HIGH: { dot: 'bg-risk-high', badge: 'text-risk-high bg-risk-high/10', text: 'text-risk-high' },
+            MEDIUM: { dot: 'bg-risk-med', badge: 'text-risk-med bg-risk-med/10', text: 'text-slate-500' },
+            LOW: { dot: 'bg-risk-low', badge: 'text-risk-low bg-risk-low/10', text: 'text-slate-500' },
+        }[risk];
+
+        return `
+            <div class="relative">
+                <div class="absolute -left-[21px] top-1 h-3 w-3 rounded-full ${riskStyles.dot} border-2 border-white dark:border-slate-900"></div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium text-slate-600 dark:text-slate-400">${formatForecastLabel(item.date, baseDateStr)}</span>
+                    <span class="text-xs font-bold ${riskStyles.badge} px-2 py-0.5 rounded">${risk}</span>
+                </div>
+                <p class="text-xs ${riskStyles.text} mt-0.5">Estimated rainfall: ${rain.toFixed(1)} mm</p>
+            </div>
+        `;
+    }).join('');
+}
+
 async function updateRainfallTrend(dateStr, region) {
     const canvas = document.getElementById('rainfallTrendChart');
-    if (!canvas) return; // Not on dashboard
+    const hasForecastList = !!document.getElementById('forecast-list');
+    if (!canvas && !hasForecastList) return; // Not on dashboard
 
     try {
         const url = `${window.API_BASE_URL || ''}/api/forecast/${region}/rainfall-trend?date=${dateStr}`;
@@ -146,6 +200,29 @@ async function updateRainfallTrend(dateStr, region) {
         if (!envelope.success) throw new Error(envelope.error?.message || 'API Error');
 
         const trends = envelope.data;
+        renderForecastList(trends, dateStr);
+        if (!canvas) return;
+        if (!Array.isArray(trends) || trends.length === 0) {
+            if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
+            canvas.style.display = 'none';
+            const wrap = canvas.parentElement;
+            if (wrap) {
+                wrap.style.position = 'relative';
+                let nd = document.getElementById('rainfall-trend-nodata');
+                if (!nd) {
+                    nd = document.createElement('div');
+                    nd.id = 'rainfall-trend-nodata';
+                    nd.className = 'absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400';
+                    nd.textContent = 'nodata';
+                    wrap.appendChild(nd);
+                } else nd.style.display = 'flex';
+            }
+            return;
+        }
+        canvas.style.display = 'block';
+        const ndEl = document.getElementById('rainfall-trend-nodata');
+        if (ndEl) ndEl.style.display = 'none';
+
         const labels = trends.map(t => {
             const parts = t.date.split('-');
             return `${parts[2]}/${parts[1]}`;
@@ -252,36 +329,59 @@ async function initDetailChartsPage() {
 }
 
 function updateDetailOverviewCards(data) {
+    const ND = 'nodata';
     const rElem = document.getElementById('rainfall-val');
     const sElem = document.getElementById('soil-val');
     const dElem = document.getElementById('dem-val');
     const riskElem = document.getElementById('risk-val');
 
-    if (rElem) rElem.textContent = `${data.rainfall || 0} mm`;
-    if (sElem) sElem.textContent = `${data.soilMoisture || 0}%`;
-    if (dElem) dElem.textContent = `${data.dem || 0} m`;
+    if (rElem) rElem.textContent = data.rainfall != null && !Number.isNaN(Number(data.rainfall)) ? `${data.rainfall} mm` : ND;
+    if (sElem) sElem.textContent = data.soilMoisture != null && !Number.isNaN(Number(data.soilMoisture)) ? `${data.soilMoisture}%` : ND;
+    if (dElem) dElem.textContent = data.dem != null && !Number.isNaN(Number(data.dem)) ? `${data.dem} m` : ND;
     if (riskElem) {
-        riskElem.textContent = data.floodRisk || 'LOW';
+        const hasRisk = data.floodRisk != null && String(data.floodRisk).trim() !== '';
+        riskElem.textContent = hasRisk ? data.floodRisk : ND;
         const colors = { 'LOW': 'text-green-600', 'MEDIUM': 'text-yellow-600', 'HIGH': 'text-orange-600', 'CRITICAL': 'text-red-600' };
-        riskElem.className = `text-2xl font-bold mt-1 ${colors[data.floodRisk] || 'text-slate-600'}`;
+        riskElem.className = `text-2xl font-bold mt-1 ${hasRisk ? (colors[data.floodRisk] || 'text-slate-600') : 'text-slate-400'}`;
     }
 }
 
 function renderDetailCharts(currentData) {
+    const ND = 'nodata';
     const labels = ['-6d', '-5d', '-4d', '-3d', '-2d', '-1d', 'Today'];
-    const rainData = [10, 5, 20, 15, 40, 25, currentData.rainfall || 0];
-    const soilData = [40, 42, 45, 50, 60, 55, currentData.soilMoisture || 0];
+    const last = labels.length - 1;
+    const rainLast = currentData.rainfall != null && !Number.isNaN(Number(currentData.rainfall)) ? Number(currentData.rainfall) : null;
+    const soilLast = currentData.soilMoisture != null && !Number.isNaN(Number(currentData.soilMoisture)) ? Number(currentData.soilMoisture) : null;
+    const rainData = labels.map((_, i) => (i === last ? rainLast : null));
+    const soilData = labels.map((_, i) => (i === last ? soilLast : null));
 
     const rCtx = document.getElementById('rainfallChart')?.getContext('2d');
     const rdCtx = document.getElementById('radarChart')?.getContext('2d');
     const cCtx = document.getElementById('correlationChart')?.getContext('2d');
     if (!rCtx || !rdCtx || !cCtx || typeof Chart === 'undefined') return;
 
+    const tooltipFmt = (ctx) => {
+        const v = ctx.raw;
+        const base = `${ctx.dataset.label}: `;
+        return base + (v == null || Number.isNaN(v) ? ND : v);
+    };
+
     new Chart(rCtx, {
         type: 'line',
-        data: { labels, datasets: [{ label: 'Rainfall (mm)', data: rainData, borderColor: '#1976d2', backgroundColor: 'rgba(25, 118, 210, 0.1)', tension: 0.4, fill: true }] },
-        options: { responsive: true, maintainAspectRatio: false }
+        data: { labels, datasets: [{ label: 'Rainfall (mm)', data: rainData, borderColor: '#1976d2', backgroundColor: 'rgba(25, 118, 210, 0.1)', tension: 0.4, fill: true, spanGaps: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { tooltip: { callbacks: { label: tooltipFmt } } }
+        }
     });
+
+    const rR = rainLast != null ? Math.min(rainLast, 100) : null;
+    const sR = soilLast;
+    const sl = currentData.slope != null ? Number(currentData.slope) * 10 : null;
+    const el = currentData.dem != null ? Number(currentData.dem) * 5 : null;
+    const fl = currentData.flow != null ? Number(currentData.flow) * 2 : null;
+    const lc = currentData.landCover != null ? Math.min(Number(currentData.landCover) * 10, 100) : null;
+    const radarData = [rR, sR, sl, el, fl, lc];
 
     new Chart(rdCtx, {
         type: 'radar',
@@ -289,11 +389,15 @@ function renderDetailCharts(currentData) {
             labels: ['Rainfall', 'Soil Moisture', 'Slope', 'Elevation', 'Flow', 'Land Cover'],
             datasets: [{
                 label: 'Current Status',
-                data: [Math.min((currentData.rainfall || 0), 100), currentData.soilMoisture || 0, (currentData.slope || 0) * 10, (currentData.dem || 0) * 5, (currentData.flow || 0) * 2, 50],
+                data: radarData,
                 backgroundColor: 'rgba(255, 99, 132, 0.2)', borderColor: 'rgb(255, 99, 132)'
             }]
         },
-        options: { responsive: true, maintainAspectRatio: false, scales: { r: { suggestedMax: 100 } } }
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: { r: { suggestedMax: 100 } },
+            plugins: { tooltip: { callbacks: { label: tooltipFmt } } }
+        }
     });
 
     new Chart(cCtx, {
@@ -301,11 +405,15 @@ function renderDetailCharts(currentData) {
         data: {
             labels,
             datasets: [
-                { label: 'Soil Moisture (%)', data: soilData, backgroundColor: 'rgba(255, 87, 34, 0.6)', order: 1 },
-                { label: 'Rainfall (mm)', data: rainData, type: 'line', borderColor: '#2196F3', borderWidth: 2, order: 0 }
+                { label: 'Soil Moisture (%)', data: soilData, backgroundColor: 'rgba(255, 87, 34, 0.6)', order: 1, spanGaps: false },
+                { label: 'Rainfall (mm)', data: rainData, type: 'line', borderColor: '#2196F3', borderWidth: 2, order: 0, spanGaps: false }
             ]
         },
-        options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false } }
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { tooltip: { callbacks: { label: tooltipFmt } } }
+        }
     });
 }
 

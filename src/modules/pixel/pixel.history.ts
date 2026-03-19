@@ -126,8 +126,7 @@ export async function getPixelHistory(region: string, lat: number, lng: number, 
 
    Strategy: Sample up to MAX_SAMPLE_PER_MONTH dates per month,
    then extrapolate to estimate the full monthly total.
-   This drastically reduces R2 reads (72 months × ~8 samples = ~576
-   instead of 72 × ~30 = ~2190).
+   Example: 6 years × 12 months × 4 samples ≈ 288 rainfall reads vs per-day full history.
    ───────────────────────────────────────────────── */
 
 export interface MonthlyRainfall {
@@ -211,8 +210,8 @@ export async function getMonthlyRainfall(
         }
     }
 
-    // Process month tasks with limited concurrency
-    const MONTH_CONCURRENCY = 3; // 3 months at a time to avoid R2 socket exhaustion
+    // Process month tasks with limited concurrency (6 months × up to 4 date reads ≈ 24 parallel R2 reads max)
+    const MONTH_CONCURRENCY = 6;
 
     for (let i = 0; i < monthTasks.length; i += MONTH_CONCURRENCY) {
         const batch = monthTasks.slice(i, i + MONTH_CONCURRENCY);

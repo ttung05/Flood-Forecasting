@@ -384,14 +384,14 @@
                     <span id="map-style-label" class="toggle-label">Vệ tinh</span>
                 </div>
 
-                <!-- Toggle Button for 7-Day Forecast (When Closed) -->
+                <!-- Toggle Button for side panel (Rainfall chart) when closed -->
                 <button id="toggle-forecast-open"
                     class="hidden absolute top-1/2 -translate-y-1/2 left-0 z-20 bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm p-2 rounded-r-lg shadow-floating border border-white/20 border-l-0 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                     onclick="document.getElementById('forecast-panel').classList.remove('hidden'); this.classList.add('hidden'); document.getElementById('timeline-panel').classList.remove('left-0'); document.getElementById('timeline-panel').classList.add('left-80');">
                     <span class="material-icons text-slate-600 dark:text-slate-300 text-lg">chevron_right</span>
                 </button>
 
-                <!-- 7-Day Forecast & Rainfall Chart Panel (Left Side - Full Height) -->
+                <!-- Rainfall trend chart panel (left side) -->
                 <div id="forecast-panel"
                     class="absolute top-0 bottom-0 left-0 bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm rounded-r-xl shadow-floating z-10 w-80 border border-white/20 border-l-0 overflow-y-auto transition-all duration-300">
                     <!-- Close Button -->
@@ -403,74 +403,27 @@
 
                     <!-- Content Container -->
                     <div class="p-4">
-                        <!-- 7-Day Forecast Section -->
+                        <!-- 7-Day Forecast Section (API-driven) -->
                         <div class="mb-6 pb-6 border-b border-slate-200 dark:border-slate-700">
                             <div class="flex items-center justify-between mb-4">
                                 <h2 class="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
                                     <span class="material-icons text-primary text-xl">calendar_today</span>
                                     7-Day Forecast
                                 </h2>
-                                <span id="forecast-region-label" class="text-xs text-slate-400">Đà Nẵng</span>
+                                <span id="forecast-region-label" class="text-xs text-slate-400">Da Nang</span>
                             </div>
-                            <div class="relative pl-4 border-l-2 border-slate-100 dark:border-slate-800 space-y-4">
-                                <!-- Day 1 -->
+                            <div id="forecast-list"
+                                class="relative pl-4 border-l-2 border-slate-100 dark:border-slate-800 space-y-4">
                                 <div class="relative">
                                     <div
-                                        class="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-risk-low border-2 border-white dark:border-slate-900">
+                                        class="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-slate-300 border-2 border-white dark:border-slate-900">
                                     </div>
                                     <div class="flex items-center justify-between">
-                                        <span class="text-sm font-medium text-slate-600 dark:text-slate-400">Oct 12
-                                            (Today)</span>
+                                        <span class="text-sm font-medium text-slate-600 dark:text-slate-400">Loading forecast...</span>
                                         <span
-                                            class="text-xs font-bold text-risk-low bg-risk-low/10 px-2 py-0.5 rounded">LOW</span>
+                                            class="text-xs font-bold text-slate-500 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded">--</span>
                                     </div>
-                                    <p class="text-xs text-slate-400 mt-0.5">Scattered showers, 15mm</p>
-                                </div>
-                                <!-- Day 2 -->
-                                <div class="relative">
-                                    <div
-                                        class="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-risk-med border-2 border-white dark:border-slate-900">
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <span class="text-sm font-medium text-slate-600 dark:text-slate-400">Oct
-                                            13</span>
-                                        <span
-                                            class="text-xs font-bold text-risk-med bg-risk-med/10 px-2 py-0.5 rounded">MEDIUM</span>
-                                    </div>
-                                    <p class="text-xs text-slate-400 mt-0.5">Heavy rain expected, 45mm</p>
-                                </div>
-                                <!-- Day 3 -->
-                                <div
-                                    class="relative bg-red-50 dark:bg-red-900/10 -mx-2 px-2 py-2 rounded-lg border border-red-100 dark:border-red-900/30">
-                                    <div
-                                        class="absolute -left-[29px] top-3 h-3 w-3 rounded-full bg-risk-high border-2 border-white dark:border-slate-900 shadow-[0_0_0_2px_rgba(244,67,54,0.3)]">
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <span class="text-sm font-bold text-slate-800 dark:text-white">Oct 14</span>
-                                        <div
-                                            class="flex items-center gap-1 bg-risk-high text-white px-2 py-0.5 rounded shadow-sm">
-                                            <span class="material-icons text-[10px]">warning</span>
-                                            <span class="text-xs font-bold">HIGH</span>
-                                        </div>
-                                    </div>
-                                    <p class="text-xs text-risk-high mt-1 font-medium">Severe storm surge warnings.</p>
-                                    <div
-                                        class="mt-2 h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                                        <div class="h-full bg-risk-high w-[85%] rounded-full"></div>
-                                    </div>
-                                    <div class="text-[10px] text-right text-slate-400 mt-1">85% Probability</div>
-                                </div>
-                                <!-- Day 4 -->
-                                <div class="relative opacity-60">
-                                    <div
-                                        class="absolute -left-[21px] top-1 h-3 w-3 rounded-full bg-risk-high border-2 border-white dark:border-slate-900">
-                                    </div>
-                                    <div class="flex items-center justify-between">
-                                        <span class="text-sm font-medium text-slate-600 dark:text-slate-400">Oct
-                                            15</span>
-                                        <span
-                                            class="text-xs font-bold text-risk-high bg-risk-high/10 px-2 py-0.5 rounded">HIGH</span>
-                                    </div>
+                                    <p class="text-xs text-slate-400 mt-0.5">Dang tai du lieu tu API</p>
                                 </div>
                             </div>
                         </div>

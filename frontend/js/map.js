@@ -23,6 +23,12 @@ const REGION_BOUNDS = {
     }
 };
 
+/** Leaflet [[south, west], [north, east]] from REGION_BOUNDS entry */
+function leafletBoundsFromRegion(rb) {
+    if (!rb) return null;
+    return [[rb.south, rb.west], [rb.north, rb.east]];
+}
+
 // ============================================================
 // LAYER MANAGER (Config & UI Checkbox Toggles)
 // ============================================================
@@ -82,7 +88,7 @@ const LayerManager = window.LayerManager = {
             } else {
                 checkbox.disabled = true;
                 checkbox.parentElement.classList.add('opacity-50', 'cursor-not-allowed');
-                if (labelSpan) labelSpan.textContent = `${conf.name} (N/A)`;
+                if (labelSpan) labelSpan.textContent = `${conf.name} (nodata)`;
             }
         }
     },
@@ -106,9 +112,6 @@ document.addEventListener('DOMContentLoaded', () => { setTimeout(() => { LayerMa
 // ============================================================
 let _maskOverlay = null;
 let _maskAbortController = null;
-const MASK_BOUNDS = {
-    DaNang: [[15.95, 107.90], [16.25, 108.40]],
-};
 
 /**
  * Render flood mask as a single PNG ImageOverlay.
@@ -126,7 +129,7 @@ async function renderFloodMask(region, date) {
     if (_maskAbortController) _maskAbortController.abort();
     _maskAbortController = new AbortController();
 
-    const bounds = MASK_BOUNDS[region];
+    const bounds = leafletBoundsFromRegion(REGION_BOUNDS[region]);
     if (!bounds) {
         console.warn('⚠️ No mask bounds for region:', region);
         return false;
@@ -243,8 +246,9 @@ function readPixelFromCachedGrid(layer, region, date, lat, lng) {
     if (!grid || !grid.data) return undefined; // undefined = not cached
 
     const { bounds, width, height, data } = grid;
-    const col = Math.floor((lng - bounds.west) / (bounds.east - bounds.west) * width);
-    const row = Math.floor((bounds.north - lat) / (bounds.north - bounds.south) * height);
+    const west = bounds.west, east = bounds.east, north = bounds.north, south = bounds.south;
+    const col = Math.floor((lng - west) / (east - west) * width);
+    const row = Math.floor((north - lat) / (north - south) * height);
 
     if (col < 0 || col >= width || row < 0 || row >= height) return null;
     return data[row * width + col];
@@ -360,22 +364,22 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
 
         // Safe value formatters (backend now returns de-normalized physical values)
         const fmtVal = (v, unit, decimals = 2) => {
-            if (v == null || v === undefined) return 'N/A';
+            if (v == null || v === undefined) return 'nodata';
             const num = Number(v);
-            if (isNaN(num)) return 'N/A';
+            if (isNaN(num)) return 'nodata';
             return num.toFixed(decimals) + unit;
         };
         const fmtPct = (v) => {
-            if (v == null || v === undefined) return 'N/A';
+            if (v == null || v === undefined) return 'nodata';
             const num = Number(v);
-            if (isNaN(num)) return 'N/A';
+            if (isNaN(num)) return 'nodata';
             return (num * 100).toFixed(1) + '%';
         };
         const fmtLandCover = (v) => {
-            if (v == null || v === undefined) return 'N/A';
+            if (v == null || v === undefined) return 'nodata';
             const num = Number(v);
-            if (isNaN(num)) return 'N/A';
-            if (num < 0.05) return 'Water / N/A';
+            if (isNaN(num)) return 'nodata';
+            if (num < 0.05) return 'nodata';
             if (num < 0.15) return 'Trees';
             if (num < 0.25) return 'Shrubland';
             if (num < 0.35) return 'Grassland';
@@ -388,9 +392,9 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
             return 'Mangroves';
         };
         const fmtFlood = (v) => {
-            if (v == null || v === undefined) return 'N/A';
+            if (v == null || v === undefined) return 'nodata';
             const num = Number(v);
-            if (isNaN(num)) return 'N/A';
+            if (isNaN(num)) return 'nodata';
             return (num * 100).toFixed(0) + '%';
         };
 
@@ -454,17 +458,6 @@ function buildSelectedAreaPopupContent(data, lat, lng, region, date) {
                     <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
                         <span style="color: #64748b;">Land Cover:</span>
                         <span style="font-weight: 500; color: #475569;">${fmtLandCover(data.landCover)}</span>
-                    </div>
-
-                    <!-- Risk Bar -->
-                    <div style="margin: 10px 0; padding: 8px; background: ${riskColor}10; border-radius: 6px; border: 1px solid ${riskColor}30;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                            <span style="font-size: 9px; font-weight: 600; color: ${riskColor};">Flood Risk Level</span>
-                            <span style="font-size: 10px; font-weight: 700; color: ${riskColor};">${risk}</span>
-                        </div>
-                        <div style="height: 5px; background: #e5e7eb; border-radius: 3px; overflow: hidden;">
-                            <div style="height: 100%; width: ${risk === 'LOW' ? '25' : risk === 'MEDIUM' ? '55' : risk === 'HIGH' ? '80' : risk === 'CRITICAL' ? '100' : '10'}%; background: ${riskColor}; border-radius: 3px; transition: width 0.5s ease;"></div>
-                        </div>
                     </div>
 
                     <!-- Footer -->
@@ -619,10 +612,10 @@ async function handleMapClick(e) {
 
         if (!envelope.success) {
             console.warn(`⚠️ API Error: ${envelope.error?.message || response.status}`);
-            data = { floodRisk: 'NO DATA', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
+            data = { floodRisk: 'nodata', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
         } else if (envelope.data == null || envelope.data === undefined) {
             console.warn('⚠️ API returned success but no data');
-            data = { floodRisk: 'NO DATA', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
+            data = { floodRisk: 'nodata', rainfall: null, dem: null, slope: null, soilMoisture: null, flow: null, landCover: null, tide: null };
         } else {
             data = envelope.data;
             console.log(`✅ Pixel data fetched in ${elapsed}ms (server: ${data.metadata?.responseTimeMs || '?'}ms)`);
@@ -747,7 +740,7 @@ function createGridCanvasOverlay(gridData) {
 
     const GridCanvasLayer = L.Layer.extend({
         initialize: function (opts) {
-            this._grid = { width, height, bounds, data, latStep, lngStep, nodata };
+            this._grid = { width, height, bounds, data, latStep, lngStep, nodata, scale: gridData.scale || 1 };
             L.setOptions(this, opts || {});
             this._raf = null;
         },
@@ -809,10 +802,13 @@ function createGridCanvasOverlay(gridData) {
             const sw = map.getBounds().getSouthWest();
             const ne = map.getBounds().getNorthEast();
 
+            const gScale = g.scale && g.scale > 0 ? g.scale : 1;
             for (let row = 0; row < g.height; row += step) {
                 for (let col = 0; col < g.width; col += step) {
-                    const val = g.data[row * g.width + col];
-                    if (val == null || val <= 0 || val <= -9998 || val === g.nodata) continue;
+                    const raw = g.data[row * g.width + col];
+                    if (raw == null || raw <= 0 || raw <= -9998 || raw === g.nodata) continue;
+                    const valNorm = gScale > 1 && Number(raw) > 1 ? Math.min(1, Number(raw) / gScale) : Math.min(1, Number(raw));
+                    if (!(valNorm > 0)) continue;
 
                     const cellNorth = g.bounds.north - row * g.latStep;
                     const cellSouth = g.bounds.north - (row + step) * g.latStep;
@@ -831,7 +827,7 @@ function createGridCanvasOverlay(gridData) {
 
                     if (w < 1 || h < 1) continue;
 
-                    const opacity = Math.max(0.15, Math.min(0.8, val));
+                    const opacity = Math.max(0.15, Math.min(0.8, valNorm));
                     ctx.fillStyle = `rgba(239, 68, 68, ${opacity.toFixed(2)})`;
                     ctx.fillRect(x, y, w, h);
                 }
@@ -864,26 +860,25 @@ function createGridImageOverlay(gridData, boundsObj) {
 
     const img = ctx.createImageData(width, height);
     const px = img.data;
+    const scale = gridData.scale && gridData.scale > 0 ? gridData.scale : 1;
 
-    // Encode as RGBA:
-    // - flood cell (val > 0) => red with alpha
-    // - otherwise transparent
-    // Note: Image origin is top-left; our grid data is row-major (row 0 = north/top) already.
+    // 1 ảnh pixel = 1 ô lưới (khớp /api/grid bounds). Hàng 0 = bắc.
     for (let i = 0; i < width * height; i++) {
         const v = data[i];
         const o = i * 4;
-        const isFlood = v != null && v !== nodata && v > 0 && v > -9998;
-        if (isFlood) {
-            px[o + 0] = 239; // R
-            px[o + 1] = 68;  // G
-            px[o + 2] = 68;  // B
-            // Map value > 0 to an appropriate opacity (assuming v is roughly 0.0-1.0 probability or depth)
-            // Starts at roughly 40 (15%) and goes up to 200 (78%)
-            const alpha = Math.max(40, Math.min(255, Math.floor((v * 160) + 40)));
-            px[o + 3] = alpha; // A
-        } else {
-            px[o + 3] = 0;
+        if (v == null || v === nodata || v <= -9998 || !(Number(v) > 0)) {
+            px[o + 0] = px[o + 1] = px[o + 2] = px[o + 3] = 0;
+            continue;
         }
+        const vn = scale > 1 && Number(v) > 1 ? Math.min(1, Number(v) / scale) : Math.min(1, Number(v));
+        if (!(vn > 0)) {
+            px[o + 0] = px[o + 1] = px[o + 2] = px[o + 3] = 0;
+            continue;
+        }
+        px[o + 0] = 239;
+        px[o + 1] = 68;
+        px[o + 2] = 68;
+        px[o + 3] = Math.max(40, Math.min(255, Math.floor(vn * 200 + 55)));
     }
 
     ctx.putImageData(img, 0, 0);
@@ -958,10 +953,22 @@ async function renderGridLayer(date, region, layerName) {
         window.activeHeatLayers = window.activeHeatLayers || [];
         window.activeHeatLayers.push(overlay);
 
+        // Cache flood grid for pixel lookup (popup) — đúng bounds từ API
+        if (layerName === 'label') {
+            const cacheKey = `label_${region}_${date}`;
+            _cachedGridData[cacheKey] = {
+                data: grid.data,
+                width: grid.size.c,
+                height: grid.size.r,
+                bounds: { north: bounds.north, south: bounds.south, east: bounds.east, west: bounds.west },
+            };
+        }
+
     } catch (e) {
         console.error(`❌ Error rendering grid layer ${layerName}:`, e);
         // Fallback: draw static bounds when grid fetch fails
-        drawDataBounds(REGION_BOUNDS[region]);
+        const rb = REGION_BOUNDS[region];
+        if (rb) drawDataBounds(rb);
     }
 }
 
@@ -982,6 +989,7 @@ function clearLayers() {
         window.activeHeatLayers.forEach(l => map.removeLayer(l));
         window.activeHeatLayers = [];
     }
+    _cachedGridData = {};
 }
 
 /**
@@ -999,13 +1007,6 @@ async function updateHeatmap(date, region, force = false) {
         window.currentDate = date;
         window.currentRegion = region;
     }
-    // Sync 7-Day Forecast region label (fix: was hardcoded "Ho Chi Minh")
-    const regionLabel = document.getElementById('forecast-region-label');
-    if (regionLabel) {
-        const displayNames = { DaNang: 'Đà Nẵng' };
-        regionLabel.textContent = displayNames[region] || region;
-    }
-
     // Cancel any pending pixel requests since date/region changed
     if (_pixelAbortController) {
         _pixelAbortController.abort();
@@ -1059,17 +1060,17 @@ async function updateHeatmap(date, region, force = false) {
             if (!bounds) return;
 
             if (showFlood) {
-                // Prefer PNG mask overlay for correct zoom scaling + best performance.
-                // Fallback to canvas grid if PNG is not available.
-                const maskOk = await renderFloodMask(regionName, date);
-                if (!maskOk) {
-                    // renderGridLayer draws the bounding box using actual data bounds
-                    await renderGridLayer(date, regionName, 'label');
+                // Mặc định: grid binary từ /api/grid — bounds + size khớp GeoTIFF → lưới đỏ đúng từng pixel.
+                // PNG R2 có thể lệch bounds hoặc quá thô; bật lại bằng window.USE_PNG_FLOOD_MASK = true nếu cần tối ưu mạng.
+                if (window.USE_PNG_FLOOD_MASK === true) {
+                    const maskOk = await renderFloodMask(regionName, date);
+                    if (!maskOk) await renderGridLayer(date, regionName, 'label');
+                    else {
+                        const rb = REGION_BOUNDS[regionName];
+                        if (rb) setDataBoundsRect({ south: rb.south, west: rb.west, north: rb.north, east: rb.east });
+                    }
                 } else {
-                    // If we have a mask, at least align bounds-rect to the same known region extent
-                    // (mask bounds are currently region-level, not per-date).
-                    const b = MASK_BOUNDS[regionName];
-                    if (b) setDataBoundsRect({ south: b[0][0], west: b[0][1], north: b[1][0], east: b[1][1] });
+                    await renderGridLayer(date, regionName, 'label');
                 }
             } else {
                 // Fallback: draw static bounds when no grid data is requested

@@ -11,7 +11,16 @@ export type DateStr = Brand<string, 'DateStr'>;
 export type R2Key = Brand<string, 'R2Key'>;
 
 // ── Zod Schemas (validation at API boundary) ───────────────
-export const RegionSchema = z.enum(['DaNang']);
+export const RegionSchema = z.preprocess(
+    (val) => {
+        if (typeof val === 'string') {
+            const lower = val.toLowerCase();
+            if (lower === 'da-nang' || lower === 'danang') return 'DaNang';
+        }
+        return val;
+    },
+    z.enum(['DaNang'])
+);
 export const DateStrSchema = z.string().regex(
     /^\d{4}-\d{2}-\d{2}$/,
     'Date must be YYYY-MM-DD format'

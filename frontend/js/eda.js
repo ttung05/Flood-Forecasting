@@ -307,7 +307,7 @@ function renderHeatmap(plotId, layerCfg, grid) {
 
         let displayVal = '';
         if (val == null) {
-            valEl.innerHTML = '<span class="text-slate-400 italic">No Data</span>';
+            valEl.innerHTML = '<span class="text-slate-400 italic">nodata</span>';
         } else if (layerCfg.isCat && layerCfg.catLabels) {
             const rounded = Math.round(val);
             const label = layerCfg.catLabels[rounded] || `Class ${rounded}`;

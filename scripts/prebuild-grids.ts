@@ -15,7 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import AdmZip from 'adm-zip';
 
-const NPZ_DIR = path.resolve(process.cwd(), 'data', '2020-2025', 'Data_Training_Soft_NPZ');
+const NPZ_DIR = path.resolve(process.cwd(), 'data', 'training', 'Data_Training_Soft_NPZ');
 const OUT_DIR = path.resolve(process.cwd(), 'data', 'grid-bin');
 
 const REGION = 'DaNang';

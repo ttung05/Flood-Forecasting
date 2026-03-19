@@ -16,7 +16,7 @@ import { structuredLog } from '../middleware/tracing';
 import { REGION_BOUNDS, STACKED_BAND_NAMES } from '../types/common';
 
 // NPZ R2 key pattern
-const NPZ_PREFIX = '2020-2025/Data_Training_Soft_NPZ';
+const NPZ_PREFIX = 'training/Data_Training_Soft_NPZ';
 function npzKey(date: string): string {
     return `${NPZ_PREFIX}/Sample_${date}.npz`;
 }
@@ -89,7 +89,7 @@ function parseNpy(buf: Buffer): { data: Float32Array; shape: number[] } {
 import fs from 'fs';
 import path from 'path';
 
-const LOCAL_NPZ_DIR = path.resolve(process.cwd(), 'data', '2020-2025', 'Data_Training_Soft_NPZ');
+const LOCAL_NPZ_DIR = path.resolve(process.cwd(), 'data', 'training', 'Data_Training_Soft_NPZ');
 
 export async function loadNpzFromLocal(date: string): Promise<ParsedNpz | null> {
     const cacheKey = `npz_${date}`;

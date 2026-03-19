@@ -43,6 +43,45 @@ function shortDate(dateStr) {
 
 function $(id) { return document.getElementById(id); }
 
+/** Display token when a value is missing from the database / API */
+const UI_NO_DATA = 'nodata';
+
+function isPresentNumber(v) {
+    return v != null && v !== '' && typeof v !== 'boolean' && !Number.isNaN(Number(v));
+}
+
+/**
+ * Map raw pixel API row to timeline row; null = not in DB (show nodata in UI).
+ */
+function normalizePixelRow(res, date) {
+    const row = {
+        date,
+        isForecast: false,
+        rain: null,
+        soil: null,
+        risk: null,
+        dem: null,
+        slope: null,
+        flow: null,
+        landCover: null,
+        tide: null,
+    };
+    if (!res || typeof res !== 'object') return row;
+    if (isPresentNumber(res.rainfall)) row.rain = Math.max(0, Number(res.rainfall));
+    if (isPresentNumber(res.soilMoisture)) row.soil = Math.max(0, Number(res.soilMoisture) * 100);
+    if (res.floodRisk != null && String(res.floodRisk).trim() !== '') {
+        row.risk = String(res.floodRisk).toUpperCase();
+    }
+    if (isPresentNumber(res.dem)) row.dem = Number(res.dem);
+    if (isPresentNumber(res.slope)) row.slope = Number(res.slope);
+    if (isPresentNumber(res.flow)) row.flow = Number(res.flow);
+    if (res.landCover != null && res.landCover !== '' && !Number.isNaN(Number(res.landCover))) {
+        row.landCover = Number(res.landCover);
+    }
+    if (isPresentNumber(res.tide)) row.tide = Number(res.tide);
+    return row;
+}
+
 // Land cover classification lookup (MODIS IGBP)
 const LC_LABELS = {
     1: 'Evergreen Needleleaf', 2: 'Evergreen Broadleaf', 3: 'Deciduous Needleleaf',
@@ -53,7 +92,7 @@ const LC_LABELS = {
 };
 
 function lcLabel(val) {
-    if (val === null || val === undefined || val === '--') return 'N/A';
+    if (val === null || val === undefined || val === '--') return UI_NO_DATA;
     const num = Math.round(Number(val));
     return LC_LABELS[num] || `Class ${num}`;
 }
@@ -72,13 +111,17 @@ function mode(arr) {
 // ─── Risk styling ───
 function riskColor(risk) {
     const r = (risk || '').toUpperCase();
-    if (r === 'HIGH') return { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-300', icon: 'warning', iconColor: 'text-red-500' };
+    if (r === '' || r === 'NODATA' || r === 'NO DATA' || r === 'NULL') {
+        return { bg: 'bg-slate-100', text: 'text-slate-500', border: 'border-slate-200', icon: 'help', iconColor: 'text-slate-400' };
+    }
+    if (r === 'HIGH' || r === 'CRITICAL') return { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-300', icon: 'warning', iconColor: 'text-red-500' };
     if (r === 'MEDIUM') return { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-300', icon: 'visibility', iconColor: 'text-amber-500' };
     return { bg: 'bg-emerald-100', text: 'text-emerald-800', border: 'border-emerald-300', icon: 'verified_user', iconColor: 'text-emerald-500' };
 }
 
 // ─── Heatmap class ───
 function rainHmClass(v) {
+    if (v == null || Number.isNaN(Number(v))) return 'text-slate-400';
     if (v < 5) return 'hm-0';
     if (v < 15) return 'hm-1';
     if (v < 30) return 'hm-2';
@@ -86,6 +129,7 @@ function rainHmClass(v) {
     return 'hm-4';
 }
 function soilHmClass(v) {
+    if (v == null || Number.isNaN(Number(v))) return 'text-slate-400';
     if (v < 40) return 'hm-0';
     if (v < 60) return 'hm-1';
     if (v < 80) return 'hm-2';
@@ -243,7 +287,7 @@ async function fetchTimelineData() {
 
     if (bulkData && Array.isArray(bulkData) && bulkData.length > 0) {
         // Check if bulk data has any dynamic data (rainfall/soilMoisture)
-        const hasDynamicData = bulkData.some(d => d.rainfall !== null || d.soilMoisture !== null);
+        const hasDynamicData = bulkData.some(d => isPresentNumber(d.rainfall) || isPresentNumber(d.soilMoisture));
 
         if (!hasDynamicData) {
             console.info('Bulk history returned only static data — falling back to individual pixel calls');
@@ -262,18 +306,7 @@ async function fetchTimelineData() {
         state.timelineData = [];
         for (const d of recentDates) {
             const res = bulkMap[d];
-            state.timelineData.push({
-                date: d,
-                isForecast: false,
-                rain: Math.max(0, res?.rainfall ?? 0),
-                soil: Math.max(0, (res?.soilMoisture ?? 0) * 100),  // fraction → %
-                risk: res?.floodRisk || 'LOW',
-                dem: res?.dem ?? null,
-                slope: res?.slope ?? null,
-                flow: res?.flow ?? null,
-                landCover: res?.landCover ?? null,
-                tide: res?.tide ?? 0,
-            });
+            state.timelineData.push(normalizePixelRow(res, d));
         }
 
         // Enrich the focus date (last = most recent) with full pixel data for floodRisk + tide
@@ -283,9 +316,16 @@ async function fetchTimelineData() {
             );
             if (focusPixel) {
                 const focusEntry = state.timelineData[state.timelineData.length - 1];
+                const enriched = normalizePixelRow(focusPixel, state.baseDate);
                 if (focusEntry && focusEntry.date === state.baseDate) {
-                    focusEntry.risk = focusPixel.floodRisk || focusEntry.risk;
-                    focusEntry.tide = focusPixel.tide ?? focusEntry.tide;
+                    if (enriched.rain != null) focusEntry.rain = enriched.rain;
+                    if (enriched.soil != null) focusEntry.soil = enriched.soil;
+                    if (enriched.risk != null) focusEntry.risk = enriched.risk;
+                    if (enriched.tide != null) focusEntry.tide = enriched.tide;
+                    if (enriched.dem != null) focusEntry.dem = enriched.dem;
+                    if (enriched.slope != null) focusEntry.slope = enriched.slope;
+                    if (enriched.flow != null) focusEntry.flow = enriched.flow;
+                    if (enriched.landCover != null) focusEntry.landCover = enriched.landCover;
                 }
             }
         } catch (e) {
@@ -295,23 +335,8 @@ async function fetchTimelineData() {
         // Strategy 2: Fall back to individual pixel calls
         const promises = recentDates.map(d =>
             dataLoader.loadPixelData(state.lat, state.lng, d, state.region)
-                .then(res => ({
-                    date: d,
-                    isForecast: false,
-                    rain: Math.max(0, res?.rainfall ?? 0),
-                    soil: Math.max(0, (res?.soilMoisture ?? 0) * 100),  // fraction → %
-                    risk: res?.floodRisk || 'LOW',
-                    dem: res?.dem ?? null,
-                    slope: res?.slope ?? null,
-                    flow: res?.flow ?? null,
-                    landCover: res?.landCover ?? null,
-                    tide: res?.tide ?? 0,
-                }))
-                .catch(() => ({
-                    date: d, isForecast: false,
-                    rain: 0, soil: 0, risk: 'LOW',
-                    dem: null, slope: null, flow: null, landCover: null, tide: 0,
-                }))
+                .then(res => normalizePixelRow(res, d))
+                .catch(() => normalizePixelRow(null, d))
         );
         state.timelineData = await Promise.all(promises);
     }
@@ -352,9 +377,9 @@ function renderStaticKPIs() {
     const flows = state.timelineData.map(d => d.flow).filter(v => v !== null);
     const lcs = state.timelineData.map(d => d.landCover).filter(v => v !== null);
 
-    const avg = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : '--';
+    const avg = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : UI_NO_DATA;
     const mode = arr => {
-        if (!arr.length) return '--';
+        if (!arr.length) return null;
         const freq = {};
         arr.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
         return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
@@ -363,7 +388,7 @@ function renderStaticKPIs() {
     $('kpi-dem').textContent = avg(dems);
     $('kpi-slope').textContent = avg(slopes);
     $('kpi-flow').textContent = avg(flows);
-    $('kpi-landcover').textContent = lcLabel(mode(lcs));
+    $('kpi-landcover').textContent = mode(lcs) != null ? lcLabel(mode(lcs)) : UI_NO_DATA;
 
     // Also try from stats if available (pixel history uses dem/slope/flow/landCover directly)
     if (state.statisticsData && state.statisticsData.length > 0) {
@@ -377,7 +402,8 @@ function renderStaticKPIs() {
         if (withFlow.length) $('kpi-flow').textContent = (withFlow.reduce((a, d) => a + d.flow, 0) / withFlow.length).toFixed(1);
         if (withLC.length) {
             const lcVals = withLC.map(d => d.landCover);
-            $('kpi-landcover').textContent = lcLabel(mode(lcVals));
+            const m = mode(lcVals);
+            $('kpi-landcover').textContent = m != null ? lcLabel(m) : UI_NO_DATA;
         }
     }
 }
@@ -397,26 +423,40 @@ function renderRiskKPIs(idx) {
     badge.className = 'text-[10px] px-2 py-0.5 rounded-full font-semibold bg-slate-100 text-slate-600 border border-slate-200';
 
     // Rainfall
-    $('kpi-rainfall').textContent = row.rain.toFixed(1);
-    const prevRow = state.timelineData[idx - 1];
     const trendEl = $('kpi-rain-trend');
-    if (prevRow) {
-        const diff = row.rain - prevRow.rain;
-        const icon = diff > 0 ? 'trending_up' : diff < 0 ? 'trending_down' : 'trending_flat';
-        const color = diff > 5 ? 'text-red-500' : diff < -5 ? 'text-emerald-500' : 'text-slate-400';
-        trendEl.innerHTML = `<span class="material-symbols-outlined text-sm ${color}">${icon}</span>
-            <span class="text-[10px] ${color} font-semibold">${diff > 0 ? '+' : ''}${diff.toFixed(1)} mm</span>
-            <span class="text-[10px] text-slate-400">vs prev day</span>`;
+    if (row.rain == null || Number.isNaN(row.rain)) {
+        $('kpi-rainfall').textContent = UI_NO_DATA;
+        if (trendEl) trendEl.innerHTML = `<span class="text-[10px] text-slate-400">${UI_NO_DATA}</span>`;
+    } else {
+        $('kpi-rainfall').textContent = row.rain.toFixed(1);
+        const prevRow = state.timelineData[idx - 1];
+        if (prevRow && trendEl && prevRow.rain != null && !Number.isNaN(prevRow.rain)) {
+            const diff = row.rain - prevRow.rain;
+            const icon = diff > 0 ? 'trending_up' : diff < 0 ? 'trending_down' : 'trending_flat';
+            const color = diff > 5 ? 'text-red-500' : diff < -5 ? 'text-emerald-500' : 'text-slate-400';
+            trendEl.innerHTML = `<span class="material-symbols-outlined text-sm ${color}">${icon}</span>
+                <span class="text-[10px] ${color} font-semibold">${diff > 0 ? '+' : ''}${diff.toFixed(1)} mm</span>
+                <span class="text-[10px] text-slate-400">vs prev day</span>`;
+        } else if (trendEl) {
+            trendEl.innerHTML = `<span class="text-[10px] text-slate-400">${UI_NO_DATA}</span>`;
+        }
     }
 
     // Soil
-    $('kpi-soil').textContent = row.soil.toFixed(1);
-    $('kpi-soil-bar').style.width = Math.min(row.soil, 100) + '%';
-    $('kpi-soil-bar').style.background = row.soil > 85 ? '#dc2626' : row.soil > 70 ? '#d97706' : '#059669';
+    if (row.soil == null || Number.isNaN(row.soil)) {
+        $('kpi-soil').textContent = UI_NO_DATA;
+        const bar = $('kpi-soil-bar');
+        if (bar) { bar.style.width = '0%'; bar.style.background = '#cbd5e1'; }
+    } else {
+        $('kpi-soil').textContent = row.soil.toFixed(1);
+        $('kpi-soil-bar').style.width = Math.min(row.soil, 100) + '%';
+        $('kpi-soil-bar').style.background = row.soil > 85 ? '#dc2626' : row.soil > 70 ? '#d97706' : '#059669';
+    }
 
     // Risk
+    const riskDisplay = row.risk != null && String(row.risk).trim() !== '' ? row.risk : UI_NO_DATA;
     const rc = riskColor(row.risk);
-    $('kpi-risk-text').textContent = row.risk;
+    $('kpi-risk-text').textContent = riskDisplay;
     $('kpi-risk-text').className = `text-2xl font-extrabold uppercase tracking-wide ${rc.text}`;
     $('kpi-risk-icon').textContent = rc.icon;
     $('kpi-risk-icon').className = `material-symbols-outlined text-2xl ${rc.iconColor}`;
@@ -512,12 +552,12 @@ function renderMlPrediction(pred, latencyMs, row) {
     const featureList = $('ml-features-list');
     if (featureList) {
         const features = [
-            { label: 'Rainfall', value: row.rain?.toFixed(1) + ' mm', icon: 'water_drop' },
-            { label: 'Soil Moisture', value: row.soil?.toFixed(1) + '%', icon: 'grass' },
-            { label: 'Tide', value: (row.tide ?? 0).toFixed(2) + ' m', icon: 'waves' },
-            { label: 'DEM', value: (row.dem ?? 0).toFixed(1) + ' m', icon: 'terrain' },
-            { label: 'Slope', value: (row.slope ?? 0).toFixed(1) + '°', icon: 'landscape' },
-            { label: 'Flow Acc', value: String(row.flow ?? 0), icon: 'route' },
+            { label: 'Rainfall', value: row.rain != null ? row.rain.toFixed(1) + ' mm' : UI_NO_DATA, icon: 'water_drop' },
+            { label: 'Soil Moisture', value: row.soil != null ? row.soil.toFixed(1) + '%' : UI_NO_DATA, icon: 'grass' },
+            { label: 'Tide', value: row.tide != null ? row.tide.toFixed(2) + ' m' : UI_NO_DATA, icon: 'waves' },
+            { label: 'DEM', value: row.dem != null ? row.dem.toFixed(1) + ' m' : UI_NO_DATA, icon: 'terrain' },
+            { label: 'Slope', value: row.slope != null ? row.slope.toFixed(1) + '°' : UI_NO_DATA, icon: 'landscape' },
+            { label: 'Flow Acc', value: row.flow != null ? String(row.flow) : UI_NO_DATA, icon: 'route' },
             { label: 'Land Cover', value: lcLabel(row.landCover), icon: 'forest' },
         ];
         featureList.innerHTML = features.map(f => `
@@ -566,8 +606,8 @@ function renderMlFallback(row, latencyMs) {
     if (barFlood) barFlood.style.width = '0%';
     const lblNoFlood = $('ml-prob-noflood');
     const lblFlood = $('ml-prob-flood');
-    if (lblNoFlood) lblNoFlood.textContent = 'N/A';
-    if (lblFlood) lblFlood.textContent = 'N/A';
+    if (lblNoFlood) lblNoFlood.textContent = UI_NO_DATA;
+    if (lblFlood) lblFlood.textContent = UI_NO_DATA;
 
     // Model badge
     const modelBadge = $('ml-model-badge');
@@ -592,7 +632,7 @@ function renderMlFallback(row, latencyMs) {
     const kpiConfBar = $('kpi-confidence-bar');
     const kpiConfVal = $('kpi-confidence-val');
     if (kpiConfBar) kpiConfBar.style.width = '0%';
-    if (kpiConfVal) kpiConfVal.textContent = 'N/A';
+    if (kpiConfVal) kpiConfVal.textContent = UI_NO_DATA;
 }
 
 // ══════════════════════════════════════════════════════
@@ -603,9 +643,28 @@ function renderTimelineChart() {
     const ctx = $('chart-timeline');
     if (!ctx) return;
 
+    const parent = ctx.parentElement;
+    let nodataEl = $('chart-timeline-nodata');
     const labels = state.timelineData.map(d => shortDate(d.date));
-    const rainData = state.timelineData.map(d => Math.max(0, d.rain));
-    const soilData = state.timelineData.map(d => Math.max(0, d.soil));
+    const rainData = state.timelineData.map(d => (d.rain == null || Number.isNaN(d.rain) ? null : Math.max(0, d.rain)));
+    const soilData = state.timelineData.map(d => (d.soil == null || Number.isNaN(d.soil) ? null : Math.max(0, d.soil)));
+    const hasAnySeries = rainData.some(v => v != null) || soilData.some(v => v != null);
+
+    if (!hasAnySeries) {
+        if (chartTimeline) { chartTimeline.destroy(); chartTimeline = null; }
+        ctx.style.display = 'none';
+        if (!nodataEl && parent) {
+            nodataEl = document.createElement('p');
+            nodataEl.id = 'chart-timeline-nodata';
+            nodataEl.className = 'absolute inset-0 flex items-center justify-center text-sm font-mono text-slate-400';
+            nodataEl.textContent = UI_NO_DATA;
+            parent.style.position = 'relative';
+            parent.appendChild(nodataEl);
+        } else if (nodataEl) nodataEl.style.display = 'flex';
+        return;
+    }
+    ctx.style.display = 'block';
+    if (nodataEl) nodataEl.style.display = 'none';
 
     // Focus date marker (last item = most recent)
     const focusIdx = state.focusIndex;
@@ -670,6 +729,15 @@ function renderTimelineChart() {
                         title: items => {
                             const row = state.timelineData[items[0].dataIndex];
                             return `${row.date} (Observed)`;
+                        },
+                        label: ctx => {
+                            const row = state.timelineData[ctx.dataIndex];
+                            if (ctx.dataset.yAxisID === 'y') {
+                                const v = row?.rain;
+                                return `Rainfall (mm): ${v == null ? UI_NO_DATA : Number(v).toFixed(1)}`;
+                            }
+                            const v = row?.soil;
+                            return `Soil Moisture (%): ${v == null ? UI_NO_DATA : Number(v).toFixed(1)}`;
                         }
                     }
                 },
@@ -747,23 +815,26 @@ function renderEDATable() {
 
     tbody.innerHTML = state.timelineData.map((row, idx) => {
         const isActive = idx === state.focusIndex;
-        const rc = riskColor(row.risk);
         const activeClass = isActive
             ? 'bg-blue-50/60 ring-2 ring-gov-500/20 ring-inset'
             : 'hover:bg-slate-50';
 
+        const rainCell = row.rain == null || Number.isNaN(row.rain) ? UI_NO_DATA : row.rain.toFixed(1);
+        const soilCell = row.soil == null || Number.isNaN(row.soil) ? UI_NO_DATA : row.soil.toFixed(1);
+        const riskCell = row.risk != null && String(row.risk).trim() !== '' ? row.risk : UI_NO_DATA;
+        const rcRow = riskColor(row.risk);
         return `
         <tr class="cursor-pointer transition-colors ${activeClass}" onclick="onTableRowClick(${idx})" data-row-idx="${idx}">
             <td class="px-6 py-3.5 font-mono text-xs ${isActive ? 'text-gov-500 font-bold' : 'text-slate-700'}">
                 ${row.date}
             </td>
-            <td class="px-4 py-3.5 text-right data-mono text-xs ${rainHmClass(row.rain)}">${row.rain.toFixed(1)}</td>
-            <td class="px-4 py-3.5 text-right data-mono text-xs ${soilHmClass(row.soil)}">${row.soil.toFixed(1)}</td>
+            <td class="px-4 py-3.5 text-right data-mono text-xs ${rainHmClass(row.rain)}">${rainCell}</td>
+            <td class="px-4 py-3.5 text-right data-mono text-xs ${soilHmClass(row.soil)}">${soilCell}</td>
             <td class="px-4 py-3.5 text-center">
                 <span class="text-[10px] font-semibold text-slate-400">OBSERVED</span>
             </td>
             <td class="px-4 py-3.5 text-center">
-                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${rc.bg} ${rc.text}">${row.risk}</span>
+                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${rcRow.bg} ${rcRow.text}">${riskCell}</span>
             </td>
         </tr>`;
     }).join('');
@@ -801,26 +872,29 @@ function renderStatistics(histData) {
     if (!histData || histData.length === 0) return;
 
     // Support both pixel history fields (rainfall, soilMoisture) and region history fields (totalRainfall, avgSoilMoisture)
-    const rains = histData.map(d => d.rainfall ?? d.totalRainfall ?? 0).filter(v => v !== null);
-    const soils = histData.map(d => d.soilMoisture ?? d.avgSoilMoisture ?? 0).filter(v => v !== null);
+    const rains = histData.map(d => d.rainfall ?? d.totalRainfall).filter(v => isPresentNumber(v));
+    const soils = histData.map(d => d.soilMoisture ?? d.avgSoilMoisture).filter(v => isPresentNumber(v));
 
     const daysWithRain = rains.filter(r => r > 0);
-    const avgRain = daysWithRain.length ? daysWithRain.reduce((a, b) => a + b, 0) / daysWithRain.length : 0;
-    const maxRain = rains.length ? Math.max(...rains) : 0;
-    const totalRain = rains.reduce((a, b) => a + b, 0);
-    const avgSoil = soils.length ? soils.reduce((a, b) => a + b, 0) / soils.length : 0;
-    const maxSoil = soils.length ? Math.max(...soils) : 0;
+    const avgRain = daysWithRain.length ? daysWithRain.reduce((a, b) => a + b, 0) / daysWithRain.length : null;
+    const maxRain = rains.length ? Math.max(...rains) : null;
+    const totalRain = rains.length ? rains.reduce((a, b) => a + b, 0) : null;
+    const avgSoil = soils.length ? soils.reduce((a, b) => a + b, 0) / soils.length : null;
+    const maxSoil = soils.length ? Math.max(...soils) : null;
     const heavyDays = rains.filter(r => r > 20).length;
 
-    const firstDate = histData[0]?.date || '--';
-    const lastDate = histData[histData.length - 1]?.date || '--';
+    const firstDate = histData[0]?.date || UI_NO_DATA;
+    const lastDate = histData[histData.length - 1]?.date || UI_NO_DATA;
 
-    $('stat-avg-rain').textContent = avgRain.toFixed(1) + ' mm';
-    $('stat-max-rain').textContent = maxRain.toFixed(1) + ' mm';
-    $('stat-total-rain').textContent = totalRain.toFixed(1) + ' mm';
-    $('stat-avg-soil').textContent = (avgSoil * 100).toFixed(1) + '%';
-    $('stat-max-soil').textContent = (maxSoil * 100).toFixed(1) + '%';
-    $('stat-heavy-days').textContent = heavyDays + ' days';
+    const fmtMm = v => (v == null ? UI_NO_DATA : Number(v).toFixed(1) + ' mm');
+    const fmtSoilPct = v => (v == null ? UI_NO_DATA : (Number(v) * 100).toFixed(1) + '%');
+
+    $('stat-avg-rain').textContent = fmtMm(avgRain);
+    $('stat-max-rain').textContent = fmtMm(maxRain);
+    $('stat-total-rain').textContent = fmtMm(totalRain);
+    $('stat-avg-soil').textContent = fmtSoilPct(avgSoil);
+    $('stat-max-soil').textContent = fmtSoilPct(maxSoil);
+    $('stat-heavy-days').textContent = rains.length ? heavyDays + ' days' : UI_NO_DATA;
     $('stat-period').textContent = `${firstDate} → ${lastDate}`;
     $('stats-region-label').textContent = `${state.region} — ${histData.length} days analyzed`;
 }
@@ -856,46 +930,42 @@ async function initSeasonality() {
         chartContainer.appendChild(loadingOverlay);
     }
 
-    // Render empty chart immediately — will update progressively
+    // Render empty chart immediately — single API call for all years (not 6 sequential).
     renderSeasonalityChart(MONTH_LABELS, years);
 
-    // Load years sequentially via monthly endpoint (sampled — ~8 dates/month).
-    // Each year takes ~10-15s cold, ~1s cached. Progressive chart update after each.
-    let loadedCount = 0;
+    const loadingText = $('seasonality-loading-text');
+    if (loadingText) loadingText.textContent = 'Loading 2020–2025 (one request)...';
 
-    for (const year of years) {
-        const loadingText = $('seasonality-loading-text');
-        if (loadingText) loadingText.textContent = `Loading ${year}... (${loadedCount + 1}/${years.length})`;
-
-        try {
-            // Try monthly endpoint for this single year
-            const monthlyData = await dataLoader.loadMonthlyRainfall(
-                state.lat, state.lng, state.region, [year]
-            );
-
-            if (monthlyData && monthlyData[String(year)]) {
-                state.seasonalityData[year] = monthlyData[String(year)];
-                const monthsWithData = monthlyData[String(year)].filter(v => v !== null).length;
-                console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months (monthly endpoint)`);
-            } else {
-                console.warn(`📅 Seasonality ${year}: monthly endpoint returned no data`);
-            }
-        } catch (e) {
-            console.warn(`📅 Seasonality ${year}: monthly endpoint failed — ${e.message || e}`);
-        }
-
-        loadedCount++;
-
-        // Progressive chart update after each year
-        if (chartSeasonality) {
-            chartSeasonality.data.datasets.forEach((ds, idx) => {
-                const y = years[idx];
-                if (y !== undefined && state.seasonalityData[y]) {
-                    ds.data = [...state.seasonalityData[y]];
+    try {
+        const monthlyData = await dataLoader.loadMonthlyRainfall(
+            state.lat, state.lng, state.region, years
+        );
+        if (monthlyData) {
+            for (const year of years) {
+                const key = String(year);
+                if (monthlyData[key]) {
+                    state.seasonalityData[year] = monthlyData[key];
+                    const monthsWithData = monthlyData[key].filter(v => v !== null).length;
+                    console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months`);
+                } else {
+                    console.warn(`📅 Seasonality ${year}: no data in response`);
                 }
-            });
-            chartSeasonality.update('none');
+            }
+        } else {
+            console.warn('📅 Seasonality: monthly endpoint returned empty');
         }
+    } catch (e) {
+        console.warn(`📅 Seasonality: monthly endpoint failed — ${e.message || e}`);
+    }
+
+    if (chartSeasonality) {
+        chartSeasonality.data.datasets.forEach((ds, idx) => {
+            const y = years[idx];
+            if (y !== undefined && state.seasonalityData[y]) {
+                ds.data = [...state.seasonalityData[y]];
+            }
+        });
+        chartSeasonality.update('none');
     }
 
     // Remove loading overlay with fade
@@ -960,7 +1030,7 @@ function renderSeasonalityChart(monthLabels, years) {
                     borderWidth: 1,
                     cornerRadius: 8,
                     callbacks: {
-                        label: item => `${item.dataset.label}: ${item.raw !== null ? item.raw.toFixed(1) + ' mm' : 'N/A'}`
+                        label: item => `${item.dataset.label}: ${item.raw !== null && item.raw !== undefined ? item.raw.toFixed(1) + ' mm' : UI_NO_DATA}`
                     }
                 }
             },
@@ -1029,7 +1099,13 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
         const headers = ['Date', 'Rainfall_mm', 'SoilMoisture_pct', 'Risk', 'Type'];
         const rows = state.timelineData.map(d =>
-            [d.date, d.rain.toFixed(1), d.soil.toFixed(1), d.risk, d.isForecast ? 'Forecast' : 'Observed'].join(',')
+            [
+                d.date,
+                d.rain != null ? d.rain.toFixed(1) : UI_NO_DATA,
+                d.soil != null ? d.soil.toFixed(1) : UI_NO_DATA,
+                d.risk != null ? d.risk : UI_NO_DATA,
+                d.isForecast ? 'Forecast' : 'Observed'
+            ].join(',')
         );
         const csv = [headers.join(','), ...rows].join('\n');
         const blob = new Blob([csv], { type: 'text/csv' });
