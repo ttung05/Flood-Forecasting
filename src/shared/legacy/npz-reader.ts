@@ -16,7 +16,7 @@ import { structuredLog } from '../middleware/tracing';
 import { REGION_BOUNDS, STACKED_BAND_NAMES } from '../types/common';
 
 // NPZ R2 key pattern
-const NPZ_PREFIX = 'training/Data_Training_Soft_NPZ';
+const NPZ_PREFIX = 'training/2020-2025/Data_Training_Soft_NPZ';
 function npzKey(date: string): string {
     return `${NPZ_PREFIX}/Sample_${date}.npz`;
 }
@@ -149,6 +149,62 @@ export function listLocalNpzDates(): string[] {
         .map(f => f.replace('Sample_', '').replace('.npz', ''))
         .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
         .sort();
+}
+
+/**
+ * List available dates from R2 NPZ files (scan bucket prefix).
+ * Cached for 10 minutes to avoid excessive ListObjects calls.
+ */
+const r2DatesCache = new MemoryCache<string[]>(1, 10 * 60 * 1000);
+import { ListObjectsV2Command } from '@aws-sdk/client-s3';
+
+export async function listR2NpzDates(): Promise<string[]> {
+    const cacheKey = 'r2_npz_dates';
+    const cached = r2DatesCache.get(cacheKey);
+    if (cached) return cached;
+
+    const env = loadEnv();
+    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+        return [];
+    }
+
+    const s3 = new S3Client({
+        region: 'auto',
+        endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+            accessKeyId: env.R2_ACCESS_KEY_ID,
+            secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        },
+    });
+
+    const dates: string[] = [];
+    let token: string | undefined;
+
+    try {
+        do {
+            const res = await s3.send(new ListObjectsV2Command({
+                Bucket: env.R2_BUCKET_NAME,
+                Prefix: `${NPZ_PREFIX}/Sample_`,
+                MaxKeys: 1000,
+                ContinuationToken: token,
+            }));
+
+            for (const obj of (res.Contents || [])) {
+                const match = obj.Key?.match(/Sample_(\d{4}-\d{2}-\d{2})\.npz$/);
+                if (match) dates.push(match[1]!);
+            }
+
+            token = res.IsTruncated ? res.NextContinuationToken : undefined;
+        } while (token);
+
+        dates.sort();
+        r2DatesCache.set(cacheKey, dates);
+        structuredLog('info', 'r2_npz_dates_listed', { count: dates.length, firstDate: dates[0], lastDate: dates[dates.length - 1] });
+        return dates;
+    } catch (e) {
+        structuredLog('error', 'r2_npz_dates_error', { error: (e as Error).message });
+        return [];
+    }
 }
 
 /**

@@ -103,7 +103,7 @@ app.get('/api/debug/r2-check', async (req, res) => {
             bucket: env.R2_BUCKET_NAME,
         });
     }
-    const sampleKey = (req.query.key as string) || 'FloodData/DaNang/Stacked/stacked_2020-01-03.tif';
+    const sampleKey = (req.query.key as string) || 'training/2020-2025/Data_Training_Soft_NPZ/Sample_2020-01-03.npz';
     try {
         const client = new S3Client({
             region: 'auto',
@@ -116,7 +116,7 @@ app.get('/api/debug/r2-check', async (req, res) => {
         await client.send(new HeadObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: sampleKey }));
         return res.json({ ok: true, message: 'R2 reachable', bucket: env.R2_BUCKET_NAME, sampleKey, exists: true });
     } catch (e: any) {
-        const listPrefix = 'FloodData/DaNang/';
+        const listPrefix = 'training/2020-2025/Data_Training_Soft_NPZ/';
         try {
             const client = new S3Client({
                 region: 'auto',
@@ -242,7 +242,7 @@ app.get('/api/debug/npz', async (req, res) => {
     const region = (req.query.region as string) || 'DaNang';
 
     const env = loadEnv();
-    const key = `2020-2025/Data_Training_Soft_NPZ/Sample_${date}.npz`;
+    const key = `training/2020-2025/Data_Training_Soft_NPZ/Sample_${date}.npz`;
 
     const diag: Record<string, unknown> = {
         hasBounds: !!REGION_BOUNDS[region],

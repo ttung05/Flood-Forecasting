@@ -233,7 +233,7 @@ export async function getPixel(params: PixelParams): Promise<Result<PixelData, A
     if (!values) {
         structuredLog('warn', 'pixel_no_data', {
             region, date, lat, lng, traceId, source: dataSource,
-            npzKey: `2020-2025/Data_Training_Soft_NPZ/Sample_${date}.npz`,
+            npzKey: `training/2020-2025/Data_Training_Soft_NPZ/Sample_${date}.npz`,
         });
         return Err(AppErrors.notFound(`No data for ${region} on ${date}`));
     }

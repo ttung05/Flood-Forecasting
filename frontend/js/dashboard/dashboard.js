@@ -173,15 +173,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         state.baseDate = urlDate;
     } else if (state.availableDatesFlat.length > 0) {
         state.baseDate = state.availableDatesFlat[state.availableDatesFlat.length - 1];
-    } else {
-        try {
-            const tl = await dataLoader.loadTimeline();
-            state.baseDate = (tl && tl.dateRange && tl.dateRange.end) ? tl.dateRange.end : '2023-01-17';
-        } catch (e) {
-            console.warn('Timeline fallback:', e);
-            state.baseDate = '2023-01-17';
+        } else {
+            try {
+                const tl = await dataLoader.loadTimeline();
+                const latestFromTimeline = tl?.dates?.length ? tl.dates[tl.dates.length - 1] : (tl?.dateRange?.end || null);
+                state.baseDate = latestFromTimeline || new Date().toISOString().split('T')[0];
+            } catch (e) {
+                console.warn('Timeline fallback:', e);
+                // Last-resort: direct fetch for timeline; no hardcoded single day.
+                try {
+                    const r = await fetch(`${window.API_BASE_URL || ''}/api/timeline`);
+                    const env = await r.json();
+                    const dates = env?.data?.dates;
+                    if (env?.success && Array.isArray(dates) && dates.length) {
+                        state.baseDate = dates[dates.length - 1];
+                    } else {
+                        state.baseDate = new Date().toISOString().split('T')[0];
+                    }
+                } catch (e2) {
+                    state.baseDate = new Date().toISOString().split('T')[0];
+                }
+            }
         }
-    }
 
     if (progress) progress.style.width = '40%';
 

@@ -103,8 +103,22 @@ export async function getDates(region: string): Promise<Result<MetadataResponse,
         }
     }
 
-    // Strategy 3: Local NPZ file scan (offline fallback)
-    const { listLocalNpzDates } = await import('../../shared/legacy/npz-reader');
+    // Strategy 3: R2 NPZ file scan (list NPZ keys from bucket)
+    const { listR2NpzDates, listLocalNpzDates } = await import('../../shared/legacy/npz-reader');
+    const r2Dates = await listR2NpzDates();
+    if (r2Dates.length > 0) {
+        const elapsed = Date.now() - t0;
+        structuredLog('info', 'metadata_lookup', { region, source: 'r2_npz_scan', durationMs: elapsed, totalDays: r2Dates.length });
+        return Ok({
+            region,
+            dateRange: { start: r2Dates[0]!, end: r2Dates[r2Dates.length - 1]! },
+            totalDays: r2Dates.length,
+            availableDates: datesToNested(r2Dates),
+            dataSources: { type: 'r2_npz_scan' },
+        });
+    }
+
+    // Strategy 4: Local NPZ file scan (offline fallback)
     const localDates = listLocalNpzDates();
     if (localDates.length > 0) {
         const elapsed = Date.now() - t0;

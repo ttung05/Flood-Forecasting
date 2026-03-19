@@ -30,9 +30,18 @@ async function initTimeline() {
 
         slider.max = timelineDates.length - 1;
 
-        const currentDate = window.currentDate || '2023-01-17';
-        const startIndex = timelineDates.indexOf(currentDate);
-        currentDateIndex = startIndex >= 0 ? startIndex : Math.max(0, timelineDates.length - 1);
+        const desiredDate = window.currentDate;
+        let startIndex = -1;
+        if (desiredDate && timelineDates.includes(desiredDate)) {
+            startIndex = timelineDates.indexOf(desiredDate);
+        } else {
+            // Auto-choose the latest date that exists in timeline (avoid hardcoded fallback)
+            startIndex = Math.max(0, timelineDates.length - 1);
+            if (!window.currentDate || !timelineDates.includes(window.currentDate)) {
+                window.currentDate = timelineDates[startIndex] || '';
+            }
+        }
+        currentDateIndex = Math.max(0, startIndex);
         slider.value = currentDateIndex;
 
         const startElem = document.getElementById('timeline-start');

@@ -1220,13 +1220,28 @@ function initMap() {
                 }
             }
         } catch (e) {
-            console.warn('⚠️ Could not auto-set date from DB, using fallback:', currentDate);
+            console.warn('⚠️ Could not auto-set date from DB, trying timeline fallback...', currentDate);
         }
 
         // Fallback if API failed and currentDate is still null
         if (!currentDate) {
-            currentDate = '2023-01-17';
-            console.warn('⚠️ Using hardcoded fallback date:', currentDate);
+            try {
+                const tlRes = await fetch(`${window.API_BASE_URL || ''}/api/timeline`);
+                const tlEnv = await tlRes.json();
+                const tlDates = tlEnv?.data?.dates;
+                if (tlEnv?.success && Array.isArray(tlDates) && tlDates.length) {
+                    currentDate = tlDates[tlDates.length - 1];
+                    console.log('📅 Fallback: using latest date from /api/timeline:', currentDate);
+                }
+            } catch (e2) {
+                console.warn('⚠️ Timeline fallback failed:', e2?.message || e2);
+            }
+        }
+
+        // Final guard (avoid crashes if API still fails)
+        if (!currentDate) {
+            console.error('❌ Could not resolve currentDate from DB or timeline.');
+            return;
         }
 
         // Initial Heatmap Update (sau khi có date)
