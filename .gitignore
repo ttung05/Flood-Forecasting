@@ -62,3 +62,19 @@ data/
 debug-r2.json
 list-r2.ts
 output.txt
+
+# Additional data/model patterns from main
+Data/
+airflow/Data/
+airflow/data_original/
+airflow/data_processed/
+*.npz
+*.tif
+*.csv
+*.h5
+*.pkl
+airflow/.env
+airflow/config/gee-key.json
+.streamlit/
+airflow/logs/
+desktop.ini
