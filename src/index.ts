@@ -77,6 +77,42 @@ export function getWorkerPool() { return workerPool; }
 const server = app.listen(env.PORT, () => {
     console.log(`🚀 Vietnam Flood Dashboard running at http://localhost:${env.PORT}`);
     console.log(`📊 Press Ctrl+C to stop the server`);
+
+    // Background COG warmup: preload TIF headers for latest 5 dates (only ~16KB each)
+    (async () => {
+        try {
+            const { getDates } = await import('./modules/metadata/metadata.service');
+            const result = await getDates('DaNang');
+            if (result.ok) {
+                const nested = result.value.availableDates;
+                const allDates: string[] = [];
+                for (const year of Object.keys(nested).sort()) {
+                    const months = nested[year];
+                    if (!months) continue;
+                    for (const month of Object.keys(months).sort()) {
+                        const days = months[month]?.sort((a: number, b: number) => a - b) || [];
+                        for (const day of days) {
+                            allDates.push(`${year}-${month.padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+                        }
+                    }
+                }
+                const latest5 = allDates.slice(-5);
+                if (latest5.length > 0) {
+                    structuredLog('info', 'cog_warmup_start', { dates: latest5 });
+                    // Warmup stacked COG TIF sources (just headers, ~16KB each)
+                    await Promise.allSettled(
+                        latest5.map(date => {
+                            const r2Key = `FloodData/DaNang/Stacked/stacked_${date}.tif`;
+                            return legacyR2.warmupTif(r2Key);
+                        })
+                    );
+                    structuredLog('info', 'cog_warmup_done', { count: latest5.length });
+                }
+            }
+        } catch (err) {
+            structuredLog('warn', 'cog_warmup_error', { error: (err as Error).message });
+        }
+    })();
 });
 
 // ── Graceful Shutdown ──────────────────────────────────────────────────────

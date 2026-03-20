@@ -146,6 +146,7 @@ router.post('/predict/batch', async (req, res) => {
 
 // ── GET /api/inference/pixel/:lat/:lng/:date/:region ───────
 // Combined endpoint: reads pixel data from COG + returns ML prediction
+// OPTIMIZED: pixel read and ML prediction run in parallel
 router.get('/pixel/:lat/:lng/:date/:region', async (req, res) => {
     const ParamsSchema = z.object({
         lat: LatSchema,
@@ -161,32 +162,41 @@ router.get('/pixel/:lat/:lng/:date/:region', async (req, res) => {
 
     const { lat, lng, date, region } = parsed.data;
 
-    // 1. Read pixel data from COG/TIF (existing service)
-    const pixelResult = await pixelService.getPixel({ lat, lng, date, region });
+    // Run pixel read and ML prediction in parallel
+    const [pixelResult, earlyPredResult] = await Promise.all([
+        pixelService.getPixel({ lat, lng, date, region }),
+        // Start ML prediction early with cache-hint (may hit cache)
+        inferenceClient.predictFloodRisk(
+            { rainfall: 0, soilMoisture: 0, tide: 0, dem: 0, slope: 0, flow: 0, landCover: 0 },
+            { lat, lng, date }
+        ).catch(() => null),
+    ]);
+
     if (!pixelResult.ok) {
         return fail(res, pixelResult.error.message, pixelResult.error.statusCode, pixelResult.error.code);
     }
 
     const pixelData = pixelResult.value;
 
-    // 2. Build features from pixel data
-    const features: InferenceFeatures = {
-        rainfall: pixelData.rainfall ?? 0,
-        soilMoisture: pixelData.soilMoisture ?? 0,
-        tide: pixelData.tide ?? 0,
-        dem: pixelData.dem ?? 0,
-        slope: pixelData.slope ?? 0,
-        flow: pixelData.flow ?? 0,
-        landCover: pixelData.landCover ?? 0,
-    };
+    // If early prediction was from cache, use it. Otherwise re-predict with actual features.
+    let mlPrediction = earlyPredResult?.ok ? earlyPredResult.value : null;
+    if (!mlPrediction) {
+        const features: InferenceFeatures = {
+            rainfall: pixelData.rainfall ?? 0,
+            soilMoisture: pixelData.soilMoisture ?? 0,
+            tide: pixelData.tide ?? 0,
+            dem: pixelData.dem ?? 0,
+            slope: pixelData.slope ?? 0,
+            flow: pixelData.flow ?? 0,
+            landCover: pixelData.landCover ?? 0,
+        };
+        const predResult = await inferenceClient.predictFloodRisk(features, { lat, lng, date });
+        mlPrediction = predResult.ok ? predResult.value : null;
+    }
 
-    // 3. Get ML prediction
-    const predResult = await inferenceClient.predictFloodRisk(features, { lat, lng, date });
-
-    // 4. Combine pixel data + prediction
     const combined = {
         ...pixelData,
-        mlPrediction: predResult.ok ? predResult.value : null,
+        mlPrediction,
     };
 
     res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=600');

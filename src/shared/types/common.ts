@@ -49,10 +49,12 @@ export interface RegionBounds {
     cols: number;
 }
 
-// ── Band Configuration (matches merge_multiband.py) ────────
+// ── Band Configuration (matches Raw NPZ from visualize folder) ────────
+// Raw NPZ x.npy: 8 bands = [Rain(T), Rain(T-1), Rain(T-2), SoilMoisture, Tide, DEM, Slope, FlowAcc]
+// Raw NPZ y.npy: Label (flood probability)
 export const STACKED_BAND_NAMES = [
-    'rainfall', 'soilMoisture', 'tide', 'flood',
-    'dem', 'slope', 'flow', 'landCover',
+    'rainfall', 'rainfall_d1', 'rainfall_d2', 'soilMoisture',
+    'tide', 'dem', 'slope', 'flow',
 ] as const;
 
 export const STACKED_BAND_SCALES = [1000, 1000, 1000, 1000, 1, 1, 1, 1] as const;
@@ -84,9 +86,27 @@ export type FloodRisk = 'LOW' | 'MEDIUM' | 'HIGH';
 export function deriveFloodRisk(
     flood: number | null,
     rainfall: number | null,
+    soilMoisture?: number | null,
 ): FloodRisk {
-    if (flood !== null && flood > 0.5) return 'HIGH';
-    if (rainfall !== null && rainfall > 80) return 'HIGH';
-    if (rainfall !== null && rainfall > 40) return 'MEDIUM';
+    const rain = rainfall ?? 0;
+    const soil = soilMoisture ?? 0;
+
+    // HIGH: flood label confirms AND there is significant rainfall/soil moisture
+    if (flood !== null && flood > 0.5 && (rain > 50 || soil > 0.7)) return 'HIGH';
+    // HIGH: very heavy rainfall regardless of flood label
+    if (rain > 100) return 'HIGH';
+    // HIGH: heavy rain combined with saturated soil
+    if (rain > 50 && soil > 0.6) return 'HIGH';
+
+    // MEDIUM: flood label with moderate conditions
+    if (flood !== null && flood > 0.5 && (rain > 20 || soil > 0.5)) return 'MEDIUM';
+    // MEDIUM: moderate rainfall
+    if (rain > 50) return 'MEDIUM';
+    // MEDIUM: moderate rain with wet soil
+    if (rain > 20 && soil > 0.4) return 'MEDIUM';
+    // MEDIUM: very wet soil even with low rain
+    if (soil > 0.7) return 'MEDIUM';
+
+    // LOW: everything else (dry conditions, low rainfall, low soil moisture)
     return 'LOW';
 }

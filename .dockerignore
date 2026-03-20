@@ -1,0 +1,47 @@
+# Dependencies
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Python / ML
+.venv
+venv
+__pycache__
+inference_service/
+model/*.onnx
+*.py
+requirements.txt
+
+# Data & Notebooks
+data/
+notebooks/
+Dashboard/
+airflow/
+*.ipynb
+EDA.ipynb
+
+# Build artifacts
+dist/
+.wrangler/
+tsconfig.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docs
+docs/
+README
+README.md

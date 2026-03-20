@@ -1,7 +1,21 @@
-backend/scripts/
-notebooks/
+# Python / ML
+inference_service/
+model/
 *.py
+*.onnx
 requirements.txt
 .venv/
-data/
 venv/
+
+# Data & Notebooks
+data/
+notebooks/
+Dashboard/
+airflow/
+*.ipynb
+
+# Dev & Build artifacts
+.wrangler/
+__pycache__/
+.git/
+*.log

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flood Prediction · AI-Powered Analysis</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        :root{--bg:#f1f5f9;--card:#ffffff;--border:#e2e8f0;--text:#1e293b;--sub:#475569;--muted:#64748b;--accent:#2563eb;--accent2:#4f46e5;--ok:#16a34a;--warn:#d97706;--danger:#dc2626;--radius:14px}
+        body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+        .topbar{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:14px 32px;background:rgba(255,255,255,.97);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);box-shadow:0 1px 3px rgba(0,0,0,.06)}
+        .topbar-left{display:flex;align-items:center;gap:14px}
+        .topbar-logo{width:38px;height:38px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px}
+        .topbar-title{font-size:18px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+        .topbar-sub{font-size:12px;color:var(--muted)}
+        .btn-nav{display:flex;align-items:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:10px;background:white;color:var(--sub);font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;transition:all .2s}
+        .btn-nav:hover{border-color:var(--accent);color:var(--accent)}
+
+        .main{max-width:1200px;margin:0 auto;padding:28px 24px 64px}
+        .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+        .card-header{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+        .card-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:white;font-size:18px}
+        .card-title{font-size:15px;font-weight:700}
+        .card-desc{font-size:12px;color:var(--muted);margin-top:2px}
+
+        /* Pipeline Steps */
+        .pipeline{display:flex;gap:0;margin-bottom:28px;position:relative}
+        .step{flex:1;text-align:center;padding:14px 8px;background:white;border:1.5px solid var(--border);position:relative;cursor:default;transition:all .3s}
+        .step:first-child{border-radius:12px 0 0 12px}
+        .step:last-child{border-radius:0 12px 12px 0}
+        .step .step-num{width:24px;height:24px;border-radius:50%;background:#e2e8f0;color:var(--muted);font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;margin-bottom:4px}
+        .step .step-label{font-size:11px;font-weight:600;color:var(--muted);display:block}
+        .step.active{border-color:var(--accent);background:linear-gradient(135deg,rgba(37,99,235,.04),rgba(79,70,229,.04))}
+        .step.active .step-num{background:var(--accent);color:white}
+        .step.active .step-label{color:var(--accent)}
+        .step.done{border-color:var(--ok)}
+        .step.done .step-num{background:var(--ok);color:white}
+        .step.done .step-label{color:var(--ok)}
+        .step-arrow{position:absolute;right:-8px;top:50%;transform:translateY(-50%);z-index:2;color:var(--border);font-size:16px}
+
+        /* Controls Row */
+        .controls-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+        .controls-row .form-group{flex:1;min-width:150px}
+        .form-group{display:flex;flex-direction:column;gap:5px}
+        .form-group label{font-size:11px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.6px}
+        .form-group input,.form-group select{padding:10px 14px;border:1.5px solid var(--border);border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;background:#fafbfc;transition:all .2s;outline:none}
+        .form-group input:focus,.form-group select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.08);background:white}
+        .btn-primary{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 24px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;transition:all .25s;box-shadow:0 2px 8px rgba(37,99,235,.2);white-space:nowrap;height:42px}
+        .btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(37,99,235,.3)}
+        .btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none}
+        .btn-predict{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:14px;background:linear-gradient(135deg,#dc2626,#b91c1c);color:white;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;transition:all .25s;box-shadow:0 4px 14px rgba(220,38,38,.25);margin-top:16px}
+        .btn-predict:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(220,38,38,.3)}
+        .btn-predict:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+        /* Channels Grid */
+        .channels-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+        .channel-card{background:#fafbfc;border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:transform .2s}
+        .channel-card:hover{transform:translateY(-2px)}
+        .channel-plot{width:100%;height:200px}
+        .channel-label{padding:8px 12px;font-size:11px;font-weight:700;color:var(--sub);text-align:center;border-top:1px solid var(--border);background:white}
+        .channel-label .ch-idx{color:var(--accent);font-family:'JetBrains Mono',monospace}
+
+        /* Status */
+        .status-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;margin-bottom:16px;font-size:12px;color:var(--muted)}
+        .status-bar .material-icons{font-size:16px}
+        .status-bar.loading{background:#eff6ff;border-color:#bfdbfe;color:var(--accent)}
+        .status-bar.success{background:#f0fdf4;border-color:#bbf7d0;color:var(--ok)}
+        .status-bar.error{background:#fef2f2;border-color:#fecaca;color:var(--danger)}
+
+        /* Result Section */
+        .result-section{display:none;margin-top:24px;animation:slideUp .5s ease}
+        .result-section.show{display:block}
+        @keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+        .result-header{text-align:center;padding:28px 20px;border-radius:var(--radius);margin-bottom:20px}
+        .result-header.flood{background:linear-gradient(135deg,#fef2f2,#fff1f2);border:2px solid #fecaca}
+        .result-header.safe{background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:2px solid #bbf7d0}
+        .result-header.unknown{background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:2px solid var(--border)}
+        .result-emoji{font-size:48px;margin-bottom:8px}
+        .result-title{font-size:22px;font-weight:800;margin-bottom:6px}
+        .result-subtitle{font-size:13px;color:var(--sub);max-width:600px;margin:0 auto;line-height:1.6}
+        .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:16px}
+        .metric-card{background:white;border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+        .metric-val{font-size:18px;font-weight:800;font-family:'JetBrains Mono',monospace}
+        .metric-label{font-size:11px;color:var(--muted);margin-top:4px}
+        #result-map{width:100%;height:400px;border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-top:16px}
+
+        /* Model Info */
+        .model-info{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+        .mi-card{background:white;border:1px solid var(--border);border-radius:12px;padding:16px;text-align:center}
+        .mi-card .mi-icon{font-size:24px;margin-bottom:6px}
+        .mi-card .mi-val{font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace}
+        .mi-card .mi-lbl{font-size:10px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
+
+        .hidden{display:none!important}
+        @media(max-width:900px){.channels-grid{grid-template-columns:repeat(2,1fr)}.model-info{grid-template-columns:repeat(2,1fr)}}
+        @media(max-width:600px){.channels-grid{grid-template-columns:1fr}.controls-row{flex-direction:column}.pipeline .step{padding:10px 4px}.pipeline .step .step-label{font-size:9px}}
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="topbar-logo"><span class="material-icons">psychology</span></div>
+            <div>
+                <div class="topbar-title">Flood Prediction</div>
+                <div class="topbar-sub">AI-Powered · ResNet101 ONNX INT8 · 8-Channel Input</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <a href="/" class="btn-nav"><span class="material-icons" style="font-size:16px">map</span> Dashboard</a>
+            <a href="/eda.html" class="btn-nav"><span class="material-icons" style="font-size:16px">analytics</span> EDA</a>
+        </div>
+    </header>
+
+    <div class="main">
+        <!-- Model Info Bar -->
+        <div class="model-info">
+            <div class="mi-card"><div class="mi-icon">🧠</div><div class="mi-val">ResNet101</div><div class="mi-lbl">Architecture</div></div>
+            <div class="mi-card"><div class="mi-icon">⚡</div><div class="mi-val">ONNX INT8</div><div class="mi-lbl">Runtime</div></div>
+            <div class="mi-card"><div class="mi-icon">📊</div><div class="mi-val">8 Channels</div><div class="mi-lbl">Input Tensor</div></div>
+            <div class="mi-card"><div class="mi-icon">🗺️</div><div class="mi-val">1115 × 1856</div><div class="mi-lbl">Grid Size</div></div>
+        </div>
+
+        <!-- Pipeline Steps -->
+        <div class="pipeline">
+            <div class="step active" id="step-1">
+                <span class="step-num">1</span>
+                <span class="step-label">Select Date & Load Data</span>
+                <span class="step-arrow material-icons">chevron_right</span>
+            </div>
+            <div class="step" id="step-2">
+                <span class="step-num">2</span>
+                <span class="step-label">Input Image (8 Channels)</span>
+                <span class="step-arrow material-icons">chevron_right</span>
+            </div>
+            <div class="step" id="step-3">
+                <span class="step-num">3</span>
+                <span class="step-label">ONNX Inference</span>
+                <span class="step-arrow material-icons">chevron_right</span>
+            </div>
+            <div class="step" id="step-4">
+                <span class="step-num">4</span>
+                <span class="step-label">Flood Prediction Map</span>
+            </div>
+        </div>
+
+        <!-- Step 1: Select Date & Load Data -->
+        <div class="card" id="section-load">
+            <div class="card-header">
+                <div class="card-icon" style="background:linear-gradient(135deg,#3b82f6,#6366f1)"><span class="material-icons">cloud_download</span></div>
+                <div><div class="card-title">Step 1 — Load Input Data from Cloud</div><div class="card-desc">Select a date to load the 8-channel NPZ grid data from Cloudflare R2</div></div>
+            </div>
+            <div class="controls-row">
+                <div class="form-group">
+                    <label>Region</label>
+                    <select id="inp-region"><option value="DaNang" selected>Da Nang</option></select>
+                </div>
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="inp-date" value="">
+                </div>
+                <button class="btn-primary" id="btn-load" onclick="loadData()">
+                    <span class="material-icons" style="font-size:18px">cloud_download</span> Load Channels
+                </button>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div class="status-bar" id="status-bar">
+            <span class="material-icons">info</span>
+            <span id="status-text">Select a date and click "Load Channels" to begin</span>
+        </div>
+
+        <!-- Step 2: Input Image Visualization (8 Channels) -->
+        <div class="card hidden" id="section-channels">
+            <div class="card-header">
+                <div class="card-icon" style="background:linear-gradient(135deg,#22c55e,#16a34a)"><span class="material-icons">grid_view</span></div>
+                <div><div class="card-title">Step 2 — Input Image (8-Channel Spatial Tensor)</div><div class="card-desc">Each channel represents a different environmental feature. This is the intermediate image fed into the model.</div></div>
+            </div>
+            <div class="channels-grid" id="channels-grid"></div>
+            <button class="btn-predict" id="btn-predict" onclick="runInference()">
+                <span class="material-icons">rocket_launch</span> Run ONNX Model Inference
+            </button>
+        </div>
+
+        <!-- Step 3+4: Inference Result -->
+        <div class="result-section" id="section-result">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon" style="background:linear-gradient(135deg,#dc2626,#b91c1c)"><span class="material-icons">psychology</span></div>
+                    <div><div class="card-title">Step 3+4 — ONNX Inference Output</div><div class="card-desc">Flood prediction result from the ResNet101 model</div></div>
+                </div>
+                <div class="result-header" id="res-header">
+                    <div class="result-emoji" id="res-emoji"></div>
+                    <div class="result-title" id="res-title"></div>
+                    <div class="result-subtitle" id="res-subtitle"></div>
+                </div>
+                <div class="metrics-grid" id="res-metrics"></div>
+                <div id="result-map"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script>
+    (function(){
+        const REGION = new URLSearchParams(location.search).get('region') || 'DaNang';
+        document.getElementById('inp-region').value = REGION;
+
+        // Set default date to middle of rainy season
+        document.getElementById('inp-date').value = '2024-09-28';
+
+        const CHANNELS = [
+            {key:'rain',         label:'Rain (T)',         color:[[0,'#f0f9ff'],[.5,'#5bacd8'],[1,'#08519c']], band:0},
+            {key:'rain_t1',      label:'Rain (T-1)',       color:[[0,'#f0f9ff'],[.5,'#5bacd8'],[1,'#08519c']], band:1},
+            {key:'rain_t2',      label:'Rain (T-2)',       color:[[0,'#f0f9ff'],[.5,'#5bacd8'],[1,'#08519c']], band:2},
+            {key:'soilMoisture', label:'Soil Moisture',     color:[[0,'#f0f9ff'],[.5,'#38bdf8'],[1,'#0c4a6e']], band:3},
+            {key:'tide',         label:'Tide Level',        color:[[0,'#ecfeff'],[.5,'#22d3ee'],[1,'#0e7490']], band:4},
+            {key:'dem',          label:'DEM (Elevation)',   color:'Viridis', band:5},
+            {key:'slope',        label:'Slope',             color:'Viridis', band:6},
+            {key:'flow',         label:'Flow Accumulation', color:'Viridis', band:7},
+        ];
+        // Map channel keys to API layer names
+        const LAYER_MAP = {rain:'rain',soilMoisture:'soilMoisture',dem:'dem',slope:'slope',flow:'flow'};
+
+        let loadedData = {};
+
+        function setStatus(cls, text){
+            const bar = document.getElementById('status-bar');
+            bar.className = 'status-bar ' + cls;
+            document.getElementById('status-text').textContent = text;
+        }
+        function setStep(n){
+            for(let i=1;i<=4;i++){
+                const el = document.getElementById('step-'+i);
+                el.classList.remove('active','done');
+                if(i<n) el.classList.add('done');
+                if(i===n) el.classList.add('active');
+            }
+        }
+
+        // ─── Step 1: Load Data ───
+        window.loadData = async function(){
+            const date = document.getElementById('inp-date').value;
+            const region = document.getElementById('inp-region').value;
+            if(!date){setStatus('error','Please select a date');return;}
+
+            setStatus('loading','Loading 8-channel data from cloud...');
+            setStep(1);
+            document.getElementById('section-channels').classList.add('hidden');
+            document.getElementById('section-result').classList.remove('show');
+            loadedData = {};
+
+            // Load available layers via grid API (binary format, faster)
+            const layerKeys = ['rain','soilMoisture','dem','slope','flow'];
+
+            try{
+                const results = await Promise.all(layerKeys.map(async k=>{
+                    const res = await fetch(`/api/grid/${region}/${date}/${k}?format=json`);
+                    if(!res.ok) throw new Error(`Failed to load ${k} (HTTP ${res.status})`);
+                    const json = await res.json();
+                    // Grid API uses {success:true, data:...}
+                    if(!json.success && !json.ok) throw new Error(`API error for ${k}`);
+                    return {key:k, data:json.data};
+                }));
+
+                results.forEach(r=>{loadedData[r.key]=r.data;});
+
+                setStatus('success',`Loaded ${results.length} channels for ${date}. Data ready for visualization.`);
+                setStep(2);
+                renderChannels(date);
+                document.getElementById('section-channels').classList.remove('hidden');
+            }catch(e){
+                setStatus('error','Failed to load data: '+e.message);
+            }
+        };
+
+        // ─── Step 2: Render Input Channels ───
+        function renderChannels(date){
+            const grid = document.getElementById('channels-grid');
+            grid.innerHTML = '';
+            const PC = {displayModeBar:false,responsive:true};
+            const PL = {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{size:9,color:'#475569'},margin:{t:4,r:30,b:4,l:4}};
+
+            CHANNELS.forEach((ch,i)=>{
+                const card = document.createElement('div');
+                card.className = 'channel-card';
+
+                const plotDiv = document.createElement('div');
+                plotDiv.className = 'channel-plot';
+                plotDiv.id = 'ch-plot-'+i;
+                card.appendChild(plotDiv);
+
+                const labelDiv = document.createElement('div');
+                labelDiv.className = 'channel-label';
+                labelDiv.innerHTML = `<span class="ch-idx">Ch ${i}</span> · ${ch.label}`;
+                card.appendChild(labelDiv);
+
+                grid.appendChild(card);
+
+                // Try to render from loaded data
+                const d = loadedData[ch.key];
+                if(d && d.data){
+                    const r = d.size?.r || d.meta?.size?.r || 100;
+                    const c_ = d.size?.c || d.meta?.size?.c || 100;
+                    const rawData = d.data || [];
+
+                    // Downsample for display
+                    const maxPx = 200;
+                    const fR = Math.max(1,Math.ceil(r/maxPx));
+                    const fC = Math.max(1,Math.ceil(c_/maxPx));
+                    const dr = Math.ceil(r/fR), dc = Math.ceil(c_/fC);
+                    const z = [];
+                    for(let ri=0;ri<dr;ri++){
+                        const row=[];
+                        for(let ci=0;ci<dc;ci++){
+                            const idx=Math.min(ri*fR,r-1)*c_+Math.min(ci*fC,c_-1);
+                            row.push(rawData[idx]??0);
+                        }
+                        z.push(row);
+                    }
+
+                    const bounds = d.bounds || d.meta?.bounds || {};
+                    const n=bounds.n||bounds.north||16.25, s=bounds.s||bounds.south||15.95;
+                    const e=bounds.e||bounds.east||108.40, w=bounds.w||bounds.west||107.90;
+                    const lngs=[];for(let j=0;j<dc;j++)lngs.push(+(w+(e-w)*j/dc).toFixed(4));
+                    const lats=[];for(let j=0;j<dr;j++)lats.push(+(n-(n-s)*j/dr).toFixed(4));
+
+                    Plotly.newPlot(plotDiv,[{z,x:lngs,y:lats,type:'heatmap',colorscale:ch.color,
+                        colorbar:{thickness:8,len:.8,tickfont:{size:7,color:'#64748b'},outlinewidth:0},zsmooth:'fast',
+                        hovertemplate:'%{z:.3f}<extra></extra>'}],
+                        {...PL,xaxis:{visible:false},yaxis:{visible:false,autorange:'reversed'}},PC);
+                }else{
+                    // Placeholder for unavailable channels (rain_t1, rain_t2, tide)
+                    plotDiv.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#94a3b8;font-size:11px">
+                        <span class="material-icons" style="font-size:28px;margin-bottom:4px">image</span>
+                        Derived from NPZ<br><span style="font-size:9px;color:#cbd5e1">Channel ${i}</span>
+                    </div>`;
+                }
+            });
+        }
+
+        // ─── Step 3: Run Inference ───
+        window.runInference = async function(){
+            setStatus('loading','Running ONNX Model Inference...');
+            setStep(3);
+            document.getElementById('btn-predict').disabled = true;
+            document.getElementById('btn-predict').innerHTML = '<span class="material-icons" style="animation:spin .8s linear infinite">autorenew</span> Running Inference...';
+
+            const date = document.getElementById('inp-date').value;
+            const region = document.getElementById('inp-region').value;
+
+            try{
+                // Use a representative pixel to get prediction
+                const lat = 16.05, lng = 108.15;
+                const res = await fetch(`/api/inference/pixel/${lat}/${lng}/${date}/${region}`);
+                const json = await res.json();
+
+                setStep(4);
+
+                if(json.ok && json.data){
+                    const d = json.data;
+                    const ml = d.mlPrediction;
+                    const prob = ml ? (ml.floodProbability ?? ml.probability ?? 0) : null;
+
+                    showResult(prob, d, date, region);
+                    setStatus('success','Inference complete! Scroll down to see prediction results.');
+                }else{
+                    // Inference service likely offline — show graceful result
+                    showResult(null, null, date, region);
+                    setStatus('error','Inference service unavailable. The FastAPI service at localhost:8001 may not be running.');
+                }
+            }catch(e){
+                setStep(4);
+                showResult(null, null, date, REGION);
+                setStatus('error','Inference failed: '+e.message+'. Make sure the FastAPI inference service is running.');
+            }finally{
+                document.getElementById('btn-predict').disabled = false;
+                document.getElementById('btn-predict').innerHTML = '<span class="material-icons">rocket_launch</span> Run ONNX Model Inference';
+            }
+        };
+
+        // ─── Step 4: Show Result ───
+        function showResult(prob, pixelData, date, region){
+            const section = document.getElementById('section-result');
+            section.classList.add('show');
+
+            const header = document.getElementById('res-header');
+
+            if(prob !== null){
+                const isFlood = prob >= 0.4;
+                header.className = 'result-header ' + (isFlood?'flood':'safe');
+                document.getElementById('res-emoji').textContent = isFlood?'🌊':'✅';
+                document.getElementById('res-title').textContent = (prob>=0.7?'HIGH':prob>=0.4?'MEDIUM':'LOW')+' FLOOD RISK';
+                document.getElementById('res-title').style.color = prob>=0.7?'#dc2626':prob>=0.4?'#d97706':'#16a34a';
+                document.getElementById('res-subtitle').textContent = `The ResNet101 ONNX model predicts a ${(prob*100).toFixed(1)}% flood probability for ${date} in ${region}. ` +
+                    (isFlood ? 'Environmental conditions indicate significant flood risk.' : 'Current conditions suggest the area is relatively safe.');
+
+                const features = pixelData ? [
+                    {val:`${(prob*100).toFixed(1)}%`, lbl:'Flood Probability', color:prob>=0.4?'#dc2626':'#16a34a'},
+                    {val:`${(pixelData.rainfall??0).toFixed(2)} mm`, lbl:'Rainfall'},
+                    {val:`${(pixelData.soilMoisture??0).toFixed(3)}`, lbl:'Soil Moisture'},
+                    {val:`${(pixelData.dem??0).toFixed(1)} m`, lbl:'Elevation'},
+                    {val:`${(pixelData.slope??0).toFixed(1)}°`, lbl:'Slope'},
+                    {val:`${(pixelData.flow??0).toFixed(0)}`, lbl:'Flow Acc'},
+                ] : [{val:`${(prob*100).toFixed(1)}%`, lbl:'Flood Probability', color:prob>=0.4?'#dc2626':'#16a34a'}];
+
+                document.getElementById('res-metrics').innerHTML = features.map(f=>
+                    `<div class="metric-card"><div class="metric-val" style="color:${f.color||'inherit'}">${f.val}</div><div class="metric-label">${f.lbl}</div></div>`
+                ).join('');
+            }else{
+                header.className = 'result-header unknown';
+                document.getElementById('res-emoji').textContent = '⚠️';
+                document.getElementById('res-title').textContent = 'INFERENCE SERVICE OFFLINE';
+                document.getElementById('res-title').style.color = '#d97706';
+                document.getElementById('res-subtitle').textContent = 'The FastAPI inference service (localhost:8001) is not running. The input image has been prepared successfully (Step 2). To get predictions, start the Python service: cd model && python -m uvicorn app:app --port 8001';
+                document.getElementById('res-metrics').innerHTML = '';
+            }
+
+            // Show result map with flood overlay
+            initResultMap(prob, date, region);
+        }
+
+        let resultMap;
+        function initResultMap(prob, date, region){
+            const container = document.getElementById('result-map');
+            if(resultMap){resultMap.remove();}
+            resultMap = L.map(container).setView([16.10,108.15],11);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OSM'}).addTo(resultMap);
+
+            // If we have loaded grid data for flood/label, overlay it
+            if(loadedData.rain && loadedData.rain.bounds){
+                const b = loadedData.rain.bounds;
+                const bounds = [[b.s||b.south,b.w||b.west],[b.n||b.north,b.e||b.east]];
+                L.rectangle(bounds,{color:'#3b82f6',weight:2,fillOpacity:0.05,dashArray:'5,5'}).addTo(resultMap)
+                    .bindPopup(`<b>Analysis Region</b><br>${region} · ${date}`);
+            }
+
+            // Add marker for prediction point
+            const marker = L.marker([16.05,108.15]).addTo(resultMap);
+            marker.bindPopup(`<b>Prediction Point</b><br>Flood Prob: ${prob!==null?(prob*100).toFixed(1)+'%':'N/A'}`).openPopup();
+
+            setTimeout(()=>resultMap.invalidateSize(),200);
+        }
+
+        // Init
+        const params = new URLSearchParams(location.search);
+        if(params.get('date')) document.getElementById('inp-date').value = params.get('date');
+
+    })();
+    </script>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+</body>
+</html>

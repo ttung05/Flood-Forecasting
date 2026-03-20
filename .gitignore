@@ -59,6 +59,7 @@ data/
 # Model and Temp Files
 *.pth
 *.bin
+*.onnx
 debug-r2.json
 list-r2.ts
 output.txt
@@ -78,3 +79,9 @@ airflow/config/gee-key.json
 .streamlit/
 airflow/logs/
 desktop.ini
+
+# Vercel
+.vercel/
+
+# Docker
+.wrangler/

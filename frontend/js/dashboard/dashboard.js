@@ -3,14 +3,12 @@
  * Government-grade interactive dashboard with:
  *   - Static terrain KPIs (DEM, Slope, Flow, Land Cover)
  *   - 10-Day interactive timeline (5 past solid + 5 future dashed)
- *   - Seasonality chart (2020–2025, monthly slider)
  *   - Regional statistics table
  *   - Interactive EDA table with heatmap cells
  */
 
 // ─── Chart Instances ───
 let chartTimeline = null;
-let chartSeasonality = null;
 
 // ─── State ───
 const state = {
@@ -19,7 +17,6 @@ const state = {
     region: 'DaNang',
     baseDate: null,       // Focus date (string YYYY-MM-DD)
     timelineData: [],     // Array of { date, rain, soil, risk, ... }
-    seasonalityData: {},  // { 2020: [12 months], 2021: [...], ... }
     statisticsData: null, // Aggregated stats from pixel history
     focusIndex: 0,        // Which row in timelineData is the focus (last = most recent)
     availableDatesFlat: [], // Sorted array of 'YYYY-MM-DD' strings with data
@@ -69,9 +66,6 @@ function normalizePixelRow(res, date) {
     if (!res || typeof res !== 'object') return row;
     if (isPresentNumber(res.rainfall)) row.rain = Math.max(0, Number(res.rainfall));
     if (isPresentNumber(res.soilMoisture)) row.soil = Math.max(0, Number(res.soilMoisture) * 100);
-    if (res.floodRisk != null && String(res.floodRisk).trim() !== '') {
-        row.risk = String(res.floodRisk).toUpperCase();
-    }
     if (isPresentNumber(res.dem)) row.dem = Number(res.dem);
     if (isPresentNumber(res.slope)) row.slope = Number(res.slope);
     if (isPresentNumber(res.flow)) row.flow = Number(res.flow);
@@ -79,8 +73,45 @@ function normalizePixelRow(res, date) {
         row.landCover = Number(res.landCover);
     }
     if (isPresentNumber(res.tide)) row.tide = Number(res.tide);
+
+    // Derive risk level on frontend based on actual rainfall and soil moisture
+    row.risk = deriveFrontendRisk(row.rain, row.soil, res.flood);
     return row;
 }
+
+/**
+ * Frontend risk level derivation — combines rainfall (mm), soil moisture (%),
+ * and flood label to produce accurate risk assessment.
+ * @param {number|null} rain - Rainfall in mm
+ * @param {number|null} soil - Soil moisture in % (already ×100)
+ * @param {number|null|undefined} flood - Raw flood label from API (0-1 scale)
+ * @returns {string} 'LOW' | 'MEDIUM' | 'HIGH'
+ */
+function deriveFrontendRisk(rain, soil, flood) {
+    const r = rain ?? 0;
+    const s = soil ?? 0;       // Already in % (0-100 scale)
+    const f = (flood != null && isPresentNumber(flood)) ? Number(flood) : 0;
+
+    // HIGH: flood label confirms AND significant rainfall or wet soil
+    if (f > 0.5 && (r > 50 || s > 70)) return 'HIGH';
+    // HIGH: very heavy rainfall
+    if (r > 100) return 'HIGH';
+    // HIGH: heavy rain combined with saturated soil
+    if (r > 50 && s > 60) return 'HIGH';
+
+    // MEDIUM: flood label with moderate conditions
+    if (f > 0.5 && (r > 20 || s > 50)) return 'MEDIUM';
+    // MEDIUM: moderate rainfall
+    if (r > 50) return 'MEDIUM';
+    // MEDIUM: moderate rain with wet soil
+    if (r > 20 && s > 40) return 'MEDIUM';
+    // MEDIUM: very wet soil even with low rain
+    if (s > 70) return 'MEDIUM';
+
+    // LOW: dry/normal conditions
+    return 'LOW';
+}
+
 
 // Land cover classification lookup (MODIS IGBP)
 const LC_LABELS = {
@@ -143,6 +174,7 @@ function soilHmClass(v) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('📊 Dashboard: Initializing...');
+    const pageT0 = performance.now();
     const progress = $('load-progress');
     if (progress) progress.style.width = '20%';
 
@@ -152,12 +184,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.lng = parseFloat(params.get('lng')) || 108.20;
     state.region = params.get('region') || 'DaNang';
     const urlDate = params.get('date') || null; // Respect date from map navigation
+    const urlDateValid = Boolean(urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate));
 
     // Update header
     $('header-coords').textContent = `${state.lat.toFixed(3)}°N, ${state.lng.toFixed(3)}°E`;
     $('header-region').textContent = state.region;
 
+    if (urlDateValid) {
+        state.baseDate = urlDate;
+    }
+
     // Load available dates first — needed by all components
+    const tDates0 = performance.now();
     try {
         const datesInfo = await dataLoader.loadAvailableDates(state.region);
         if (datesInfo && datesInfo.availableDates) {
@@ -167,12 +205,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.warn('Could not load available dates:', e);
     }
+    const datesMs = Math.round(performance.now() - tDates0);
 
-    // Get base date: prefer URL param, then last available date, then fallback
-    if (urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate)) {
-        state.baseDate = urlDate;
-    } else if (state.availableDatesFlat.length > 0) {
-        state.baseDate = state.availableDatesFlat[state.availableDatesFlat.length - 1];
+    // Resolve base date when URL did not provide one
+    if (!urlDateValid) {
+        if (state.availableDatesFlat.length > 0) {
+            state.baseDate = state.availableDatesFlat[state.availableDatesFlat.length - 1];
         } else {
             try {
                 const tl = await dataLoader.loadTimeline();
@@ -180,7 +218,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 state.baseDate = latestFromTimeline || new Date().toISOString().split('T')[0];
             } catch (e) {
                 console.warn('Timeline fallback:', e);
-                // Last-resort: direct fetch for timeline; no hardcoded single day.
                 try {
                     const r = await fetch(`${window.API_BASE_URL || ''}/api/timeline`);
                     const env = await r.json();
@@ -196,31 +233,32 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
+    }
+
     if (progress) progress.style.width = '40%';
 
-    // Fetch 10 most recent days with available data
-    await fetchTimelineData();
-    if (progress) progress.style.width = '60%';
-
-    // Fetch regional statistics
-    await fetchRegionStats();
+    const tPixel0 = performance.now();
+    await loadDashboardPixelData();
+    const pixelMs = Math.round(performance.now() - tPixel0);
     if (progress) progress.style.width = '75%';
 
     // Render everything
+    const tRender0 = performance.now();
     renderStaticKPIs();
     renderTimelineChart();
     renderRiskKPIs(state.focusIndex);
     renderEDATable();
+    const renderMs = Math.round(performance.now() - tRender0);
     if (progress) progress.style.width = '90%';
 
-    // Fetch ML prediction for focus date (non-blocking)
-    fetchAndRenderMlPrediction(state.focusIndex);
-
-    // Initialize seasonality (async, non-blocking)
-    initSeasonality();
-
-    // Month slider
-    setupMonthSlider();
+    const totalMs = Math.round(performance.now() - pageT0);
+    window.__DAP_DETAIL_API_MS = {
+        datesMs,
+        pixelBatchOrHistoryMs: pixelMs,
+        renderMs,
+        totalMs,
+    };
+    console.log('⏱️ DAP detail.html API / load (ms):', window.__DAP_DETAIL_API_MS);
 
     // Footer sync time
     $('footer-sync-time').textContent = new Date().toLocaleTimeString('vi-VN', {
@@ -242,6 +280,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ══════════════════════════════════════════════════════
 //  DATA FETCHING
 // ══════════════════════════════════════════════════════
+
+/** Regional stats window (fewer days → less NPZ/R2). Timeline stays DASH_TIMELINE_DAYS. */
+const DASH_STATS_LOOKBACK_DAYS = 14;
+const DASH_TIMELINE_DAYS = 10;
 
 /**
  * Build a flat sorted array of 'YYYY-MM-DD' strings from the availableDates nested structure.
@@ -280,95 +322,86 @@ function getRecentAvailableDates(fromDate, count) {
     return flat.slice(startIdx, endIdx + 1);
 }
 
-async function fetchTimelineData() {
-    // Get 10 most recent dates with data, ending at baseDate
-    const recentDates = getRecentAvailableDates(state.baseDate, 10);
-    console.log(`📊 Timeline: ${recentDates.length} recent dates from ${recentDates[0]} to ${recentDates[recentDates.length - 1]}`);
+/**
+ * One combined load: timeline (10d) + regional stats (DASH_STATS_LOOKBACK_DAYS) via one batch POST
+ * or one GET history — avoids duplicate NPZ work and duplicate HTTP round-trips.
+ */
+async function loadDashboardPixelData() {
+    const statsDates = getRecentAvailableDates(state.baseDate, DASH_STATS_LOOKBACK_DAYS);
+    const timelineDates = getRecentAvailableDates(state.baseDate, DASH_TIMELINE_DAYS);
+    console.log(
+        `📊 Dashboard data: timeline ${timelineDates.length}d (${timelineDates[0]}…${timelineDates[timelineDates.length - 1]}), ` +
+        `stats ${statsDates.length}d`
+    );
 
-    const startDate = recentDates[0];
-    const endDate = recentDates[recentDates.length - 1];
+    let batchItems = null;
+    try {
+        batchItems = await dataLoader.loadPixelBatch(
+            state.lat, state.lng, state.region, statsDates
+        );
+    } catch (e) {
+        console.warn('Pixel batch failed:', e);
+    }
 
-    // Strategy 1: Try bulk pixel history API (single request)
+    if (batchItems && batchItems.length > 0) {
+        const hasDynamic = batchItems.some(
+            d => isPresentNumber(d.rainfall) || isPresentNumber(d.soilMoisture)
+        );
+        if (hasDynamic) {
+            const byDate = Object.fromEntries(batchItems.map(d => [d.date, d]));
+            state.timelineData = timelineDates.map(d => normalizePixelRow(byDate[d] ?? null, d));
+            state.focusIndex = state.timelineData.length - 1;
+            const statsFiltered = statsDates.map(d => byDate[d]).filter(Boolean);
+            state.statisticsData = statsFiltered;
+            if (statsFiltered.length) renderStatistics(statsFiltered);
+            return;
+        }
+    }
+
+    await fetchDashboardDataViaHistory(statsDates, timelineDates);
+}
+
+/** Fallback: single GET /api/pixel/history for the stats window (covers timeline subset). */
+async function fetchDashboardDataViaHistory(statsDates, timelineDates) {
+    const startDate = statsDates[0];
+    const endDate = statsDates[statsDates.length - 1];
     let bulkData = null;
     try {
         bulkData = await dataLoader.loadPixelHistory(
             state.lat, state.lng, state.region, startDate, endDate
         );
     } catch (e) {
-        console.warn('Bulk pixel history failed, falling back to individual calls:', e);
+        console.warn('Pixel history failed:', e);
     }
 
-    if (bulkData && Array.isArray(bulkData) && bulkData.length > 0) {
-        // Check if bulk data has any dynamic data (rainfall/soilMoisture)
-        const hasDynamicData = bulkData.some(d => isPresentNumber(d.rainfall) || isPresentNumber(d.soilMoisture));
-
-        if (!hasDynamicData) {
-            console.info('Bulk history returned only static data — falling back to individual pixel calls');
-            bulkData = null; // Force fallback
-        }
-    }
-
-    // Build a Set of target dates for filtering
-    const targetDateSet = new Set(recentDates);
-
-    if (bulkData && Array.isArray(bulkData) && bulkData.length > 0) {
-        // Map bulk results to timeline format — only keep dates that are in our target list
-        const bulkMap = {};
-        bulkData.forEach(d => { if (targetDateSet.has(d.date)) bulkMap[d.date] = d; });
-
-        state.timelineData = [];
-        for (const d of recentDates) {
-            const res = bulkMap[d];
-            state.timelineData.push(normalizePixelRow(res, d));
-        }
-
-        // Enrich the focus date (last = most recent) with full pixel data for floodRisk + tide
-        try {
-            const focusPixel = await dataLoader.loadPixelData(
-                state.lat, state.lng, state.baseDate, state.region
-            );
-            if (focusPixel) {
-                const focusEntry = state.timelineData[state.timelineData.length - 1];
-                const enriched = normalizePixelRow(focusPixel, state.baseDate);
-                if (focusEntry && focusEntry.date === state.baseDate) {
-                    if (enriched.rain != null) focusEntry.rain = enriched.rain;
-                    if (enriched.soil != null) focusEntry.soil = enriched.soil;
-                    if (enriched.risk != null) focusEntry.risk = enriched.risk;
-                    if (enriched.tide != null) focusEntry.tide = enriched.tide;
-                    if (enriched.dem != null) focusEntry.dem = enriched.dem;
-                    if (enriched.slope != null) focusEntry.slope = enriched.slope;
-                    if (enriched.flow != null) focusEntry.flow = enriched.flow;
-                    if (enriched.landCover != null) focusEntry.landCover = enriched.landCover;
-                }
-            }
-        } catch (e) {
-            console.warn('Could not enrich focus date with full pixel data:', e);
-        }
-    } else {
-        // Strategy 2: Fall back to individual pixel calls
-        const promises = recentDates.map(d =>
-            dataLoader.loadPixelData(state.lat, state.lng, d, state.region)
-                .then(res => normalizePixelRow(res, d))
-                .catch(() => normalizePixelRow(null, d))
+    if (bulkData && bulkData.length > 0) {
+        const hasDynamic = bulkData.some(
+            d => isPresentNumber(d.rainfall) || isPresentNumber(d.soilMoisture)
         );
-        state.timelineData = await Promise.all(promises);
+        if (hasDynamic) {
+            const bulkMap = Object.fromEntries(bulkData.map(d => [d.date, d]));
+            state.timelineData = timelineDates.map(d => normalizePixelRow(bulkMap[d] ?? null, d));
+            state.focusIndex = state.timelineData.length - 1;
+            const statsFiltered = statsDates.map(d => bulkMap[d]).filter(Boolean);
+            state.statisticsData = statsFiltered;
+            if (statsFiltered.length) renderStatistics(statsFiltered);
+            return;
+        }
     }
 
-    // Focus = last item (most recent date)
+    const promises = timelineDates.map(d =>
+        dataLoader.loadPixelData(state.lat, state.lng, d, state.region)
+            .then(res => normalizePixelRow(res, d))
+            .catch(() => normalizePixelRow(null, d))
+    );
+    state.timelineData = await Promise.all(promises);
     state.focusIndex = state.timelineData.length - 1;
-}
 
-async function fetchRegionStats() {
     try {
-        // Use available dates going backwards from baseDate
-        const statsDates = getRecentAvailableDates(state.baseDate, 31);
-        const start = statsDates[0];
-        const end = statsDates[statsDates.length - 1];
-        console.log(`📈 Regional Stats: ${statsDates.length} dates from ${start} to ${end}`);
-
-        const data = await dataLoader.loadPixelHistory(state.lat, state.lng, state.region, start, end);
-        if (data && Array.isArray(data) && data.length > 0) {
-            // Filter to only include dates that are in our available dates list
+        const data = await dataLoader.loadPixelHistory(
+            state.lat, state.lng, state.region, startDate, endDate
+        );
+        if (data?.length) {
             const dateSet = new Set(statsDates);
             const filtered = data.filter(d => dateSet.has(d.date));
             state.statisticsData = filtered;
@@ -378,6 +411,8 @@ async function fetchRegionStats() {
         console.warn('Stats fetch error:', e);
     }
 }
+
+
 
 // ══════════════════════════════════════════════════════
 //  RENDER: STATIC KPIs
@@ -466,187 +501,10 @@ function renderRiskKPIs(idx) {
         $('kpi-soil-bar').style.background = row.soil > 85 ? '#dc2626' : row.soil > 70 ? '#d97706' : '#059669';
     }
 
-    // Risk
-    const riskDisplay = row.risk != null && String(row.risk).trim() !== '' ? row.risk : UI_NO_DATA;
-    const rc = riskColor(row.risk);
-    $('kpi-risk-text').textContent = riskDisplay;
-    $('kpi-risk-text').className = `text-2xl font-extrabold uppercase tracking-wide ${rc.text}`;
-    $('kpi-risk-icon').textContent = rc.icon;
-    $('kpi-risk-icon').className = `material-symbols-outlined text-2xl ${rc.iconColor}`;
-    $('kpi-risk-card').className = `bg-white rounded-xl border-2 p-5 shadow-gov flex-1 ${rc.border}`;
+
 }
 
-// ══════════════════════════════════════════════════════
-//  RENDER: ML PREDICTION PANEL
-// ══════════════════════════════════════════════════════
 
-/**
- * Fetch and render ML flood prediction for the currently focused date.
- * Called on init and whenever focus changes (click timeline / table row).
- */
-async function fetchAndRenderMlPrediction(idx) {
-    const row = state.timelineData[idx];
-    if (!row) return;
-
-    // Show loading state
-    const resultCard = $('ml-result-card');
-    const resultRisk = $('ml-result-risk');
-    const resultIcon = $('ml-result-icon');
-    const resultConf = $('ml-result-confidence');
-    if (resultRisk) resultRisk.textContent = '...';
-    if (resultConf) resultConf.textContent = '--%';
-
-    const startMs = performance.now();
-
-    try {
-        const data = await dataLoader.loadMlPrediction(
-            state.lat, state.lng, row.date, state.region
-        );
-        const latencyMs = Math.round(performance.now() - startMs);
-
-        if (data && data.mlPrediction) {
-            renderMlPrediction(data.mlPrediction, latencyMs, row);
-        } else {
-            // Prediction unavailable — show fallback using rule-based from pixel data
-            renderMlFallback(row, latencyMs);
-        }
-    } catch (e) {
-        console.warn('ML prediction rendering failed:', e);
-        renderMlFallback(row, 0);
-    }
-}
-
-/**
- * Render ML prediction results into the ML panel.
- * @param {Object} pred - { flood_risk, probability, confidence, model_version, features_used }
- * @param {number} latencyMs - API call latency
- * @param {Object} row - timeline data row (for feature display)
- */
-function renderMlPrediction(pred, latencyMs, row) {
-    const risk = (pred.flood_risk || 'LOW').toUpperCase();
-    const confidence = pred.confidence ?? 0;
-    const probability = pred.probability ?? 0;
-    const modelVersion = pred.model_version || 'unknown';
-
-    const rc = riskColor(risk);
-
-    // Result card
-    const resultCard = $('ml-result-card');
-    if (resultCard) resultCard.className = `flex flex-col items-center justify-center p-6 rounded-xl border-2 ${rc.border} ${rc.bg}`;
-    const resultIcon = $('ml-result-icon');
-    if (resultIcon) { resultIcon.textContent = rc.icon; resultIcon.className = `material-symbols-outlined text-4xl mb-2 ${rc.iconColor}`; }
-    const resultRisk = $('ml-result-risk');
-    if (resultRisk) { resultRisk.textContent = risk; resultRisk.className = `text-3xl font-extrabold uppercase tracking-wide ${rc.text}`; }
-    const resultConf = $('ml-result-confidence');
-    if (resultConf) resultConf.textContent = (confidence * 100).toFixed(0) + '%';
-
-    // Probability bars
-    const probNoFlood = 1 - probability;
-    const probFlood = probability;
-    const barNoFlood = $('ml-bar-noflood');
-    const barFlood = $('ml-bar-flood');
-    const lblNoFlood = $('ml-prob-noflood');
-    const lblFlood = $('ml-prob-flood');
-    if (barNoFlood) barNoFlood.style.width = (probNoFlood * 100).toFixed(1) + '%';
-    if (barFlood) barFlood.style.width = (probFlood * 100).toFixed(1) + '%';
-    if (lblNoFlood) lblNoFlood.textContent = (probNoFlood * 100).toFixed(1) + '%';
-    if (lblFlood) lblFlood.textContent = (probFlood * 100).toFixed(1) + '%';
-
-    // Model badge + latency
-    const modelBadge = $('ml-model-badge');
-    if (modelBadge) {
-        modelBadge.textContent = `Model: ${modelVersion}`;
-        modelBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-600 border-emerald-200';
-    }
-    const latencyBadge = $('ml-latency-badge');
-    if (latencyBadge) latencyBadge.textContent = `${latencyMs} ms`;
-
-    // Feature list
-    const featureList = $('ml-features-list');
-    if (featureList) {
-        const features = [
-            { label: 'Rainfall', value: row.rain != null ? row.rain.toFixed(1) + ' mm' : UI_NO_DATA, icon: 'water_drop' },
-            { label: 'Soil Moisture', value: row.soil != null ? row.soil.toFixed(1) + '%' : UI_NO_DATA, icon: 'grass' },
-            { label: 'Tide', value: row.tide != null ? row.tide.toFixed(2) + ' m' : UI_NO_DATA, icon: 'waves' },
-            { label: 'DEM', value: row.dem != null ? row.dem.toFixed(1) + ' m' : UI_NO_DATA, icon: 'terrain' },
-            { label: 'Slope', value: row.slope != null ? row.slope.toFixed(1) + '°' : UI_NO_DATA, icon: 'landscape' },
-            { label: 'Flow Acc', value: row.flow != null ? String(row.flow) : UI_NO_DATA, icon: 'route' },
-            { label: 'Land Cover', value: lcLabel(row.landCover), icon: 'forest' },
-        ];
-        featureList.innerHTML = features.map(f => `
-            <div class="flex items-center justify-between py-0.5">
-                <span class="flex items-center gap-1.5 text-slate-600">
-                    <span class="material-symbols-outlined text-xs text-slate-400">${f.icon}</span>
-                    ${f.label}
-                </span>
-                <span class="font-mono font-medium text-slate-800">${f.value}</span>
-            </div>
-        `).join('');
-    }
-
-    // KPI confidence bar (in the flood risk KPI card)
-    const kpiConfBar = $('kpi-confidence-bar');
-    const kpiConfVal = $('kpi-confidence-val');
-    if (kpiConfBar) {
-        const pct = (confidence * 100).toFixed(0);
-        kpiConfBar.style.width = pct + '%';
-        kpiConfBar.style.background = confidence > 0.8 ? '#059669' : confidence > 0.5 ? '#d97706' : '#dc2626';
-    }
-    if (kpiConfVal) kpiConfVal.textContent = 'ML ' + (confidence * 100).toFixed(0) + '%';
-}
-
-/**
- * Render a fallback when ML service is unavailable.
- * Shows the rule-based risk from pixel data.
- */
-function renderMlFallback(row, latencyMs) {
-    const risk = (row.risk || 'LOW').toUpperCase();
-    const rc = riskColor(risk);
-
-    const resultCard = $('ml-result-card');
-    if (resultCard) resultCard.className = `flex flex-col items-center justify-center p-6 rounded-xl border-2 border-slate-200 bg-slate-50`;
-    const resultIcon = $('ml-result-icon');
-    if (resultIcon) { resultIcon.textContent = 'psychology_alt'; resultIcon.className = 'material-symbols-outlined text-4xl mb-2 text-slate-400'; }
-    const resultRisk = $('ml-result-risk');
-    if (resultRisk) { resultRisk.textContent = risk + '*'; resultRisk.className = `text-3xl font-extrabold uppercase tracking-wide text-slate-500`; }
-    const resultConf = $('ml-result-confidence');
-    if (resultConf) resultConf.textContent = 'Rule-based';
-
-    // Clear probability bars
-    const barNoFlood = $('ml-bar-noflood');
-    const barFlood = $('ml-bar-flood');
-    if (barNoFlood) barNoFlood.style.width = '0%';
-    if (barFlood) barFlood.style.width = '0%';
-    const lblNoFlood = $('ml-prob-noflood');
-    const lblFlood = $('ml-prob-flood');
-    if (lblNoFlood) lblNoFlood.textContent = UI_NO_DATA;
-    if (lblFlood) lblFlood.textContent = UI_NO_DATA;
-
-    // Model badge
-    const modelBadge = $('ml-model-badge');
-    if (modelBadge) {
-        modelBadge.textContent = 'Fallback: Rule-based';
-        modelBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 text-amber-600 border-amber-200';
-    }
-    const latencyBadge = $('ml-latency-badge');
-    if (latencyBadge) latencyBadge.textContent = latencyMs > 0 ? `${latencyMs} ms` : '-- ms';
-
-    // Features still shown from pixel data
-    const featureList = $('ml-features-list');
-    if (featureList) {
-        featureList.innerHTML = `
-            <div class="text-slate-400 text-[11px] italic py-4 text-center">
-                ML service unavailable.<br>Showing rule-based estimation.
-            </div>
-        `;
-    }
-
-    // KPI confidence bar — hide when using fallback
-    const kpiConfBar = $('kpi-confidence-bar');
-    const kpiConfVal = $('kpi-confidence-val');
-    if (kpiConfBar) kpiConfBar.style.width = '0%';
-    if (kpiConfVal) kpiConfVal.textContent = UI_NO_DATA;
-}
 
 // ══════════════════════════════════════════════════════
 //  RENDER: 10-DAY TIMELINE CHART
@@ -803,7 +661,7 @@ function renderTimelineChart() {
                     renderRiskKPIs(idx);
                     highlightTableRow(idx);
                     updateTimelineHighlight(idx);
-                    fetchAndRenderMlPrediction(idx);
+
                 }
             }
         }
@@ -858,7 +716,7 @@ function onTableRowClick(idx) {
     renderRiskKPIs(idx);
     renderEDATable();
     updateTimelineHighlight(idx);
-    fetchAndRenderMlPrediction(idx);
+
 
     // Sync chart tooltip
     if (chartTimeline) {
@@ -910,196 +768,6 @@ function renderStatistics(histData) {
     $('stat-heavy-days').textContent = rains.length ? heavyDays + ' days' : UI_NO_DATA;
     $('stat-period').textContent = `${firstDate} → ${lastDate}`;
     $('stats-region-label').textContent = `${state.region} — ${histData.length} days analyzed`;
-}
-
-// ══════════════════════════════════════════════════════
-//  SEASONALITY
-// ══════════════════════════════════════════════════════
-
-async function initSeasonality() {
-    const years = [2020, 2021, 2022, 2023, 2024, 2025];
-    const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    // Initialize datasets with nulls
-    years.forEach(y => { state.seasonalityData[y] = new Array(12).fill(null); });
-
-    console.log('📅 Seasonality: Loading monthly rainfall data...');
-
-    // Show loading indicator on chart area
-    const chartCanvas = $('chart-seasonality');
-    const chartContainer = chartCanvas?.parentElement;
-    let loadingOverlay = null;
-    if (chartContainer) {
-        chartContainer.style.position = 'relative';
-        loadingOverlay = document.createElement('div');
-        loadingOverlay.id = 'seasonality-loading';
-        loadingOverlay.className = 'absolute inset-0 flex items-center justify-center z-10 bg-white/70 rounded-lg';
-        loadingOverlay.innerHTML = `
-            <div class="flex flex-col items-center gap-2">
-                <div class="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-gov-500"></div>
-                <span class="text-xs text-slate-400 font-mono" id="seasonality-loading-text">Loading rainfall data...</span>
-            </div>
-        `;
-        chartContainer.appendChild(loadingOverlay);
-    }
-
-    // Render empty chart immediately — single API call for all years (not 6 sequential).
-    renderSeasonalityChart(MONTH_LABELS, years);
-
-    const loadingText = $('seasonality-loading-text');
-    if (loadingText) loadingText.textContent = 'Loading 2020–2025 (one request)...';
-
-    try {
-        const monthlyData = await dataLoader.loadMonthlyRainfall(
-            state.lat, state.lng, state.region, years
-        );
-        if (monthlyData) {
-            for (const year of years) {
-                const key = String(year);
-                if (monthlyData[key]) {
-                    state.seasonalityData[year] = monthlyData[key];
-                    const monthsWithData = monthlyData[key].filter(v => v !== null).length;
-                    console.log(`📅 Seasonality ${year}: ${monthsWithData}/12 months`);
-                } else {
-                    console.warn(`📅 Seasonality ${year}: no data in response`);
-                }
-            }
-        } else {
-            console.warn('📅 Seasonality: monthly endpoint returned empty');
-        }
-    } catch (e) {
-        console.warn(`📅 Seasonality: monthly endpoint failed — ${e.message || e}`);
-    }
-
-    if (chartSeasonality) {
-        chartSeasonality.data.datasets.forEach((ds, idx) => {
-            const y = years[idx];
-            if (y !== undefined && state.seasonalityData[y]) {
-                ds.data = [...state.seasonalityData[y]];
-            }
-        });
-        chartSeasonality.update('none');
-    }
-
-    // Remove loading overlay with fade
-    if (loadingOverlay) {
-        loadingOverlay.style.transition = 'opacity 0.4s';
-        loadingOverlay.style.opacity = '0';
-        setTimeout(() => loadingOverlay.remove(), 400);
-    }
-
-    console.log('✅ Seasonality chart fully loaded');
-}
-
-function renderSeasonalityChart(monthLabels, years) {
-    const ctx = $('chart-seasonality');
-    if (!ctx) return;
-
-    // Color palette for years (government-appropriate muted palette)
-    const yearColors = {
-        2020: { border: 'rgba(148, 163, 184, 0.5)', width: 1.5 },
-        2021: { border: 'rgba(100, 116, 139, 0.5)', width: 1.5 },
-        2022: { border: 'rgba(71, 85, 105, 0.55)', width: 1.5 },
-        2023: { border: 'rgba(51, 65, 85, 0.6)', width: 2 },
-        2024: { border: 'rgba(30, 41, 59, 0.65)', width: 2 },
-        2025: { border: '#d97706', width: 2.5 }, // Amber highlight for most recent
-    };
-
-    const datasets = years.map(y => ({
-        label: String(y),
-        data: [...state.seasonalityData[y]],
-        borderColor: yearColors[y].border,
-        borderWidth: yearColors[y].width,
-        tension: 0.4,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        spanGaps: true,
-    }));
-
-    if (chartSeasonality) chartSeasonality.destroy();
-
-    chartSeasonality = new Chart(ctx, {
-        type: 'line',
-        data: { labels: monthLabels, datasets },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: {
-                    display: true, position: 'bottom',
-                    labels: {
-                        usePointStyle: true, boxWidth: 8, padding: 16,
-                        font: { family: 'Inter', size: 11, weight: '500' },
-                        color: '#475569'
-                    }
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                    titleFont: { size: 12, family: 'JetBrains Mono', weight: '700' },
-                    bodyFont: { size: 11, family: 'JetBrains Mono' },
-                    padding: 12,
-                    borderColor: 'rgba(255,255,255,0.08)',
-                    borderWidth: 1,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: item => `${item.dataset.label}: ${item.raw !== null && item.raw !== undefined ? item.raw.toFixed(1) + ' mm' : UI_NO_DATA}`
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    grid: { display: false },
-                    ticks: { font: { family: 'JetBrains Mono', size: 10 }, color: '#94a3b8' }
-                },
-                y: {
-                    grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                    title: { display: true, text: 'Monthly Total Rainfall (mm)', font: { size: 10, family: 'Inter' }, color: '#64748b' },
-                    min: 0,
-                    ticks: { font: { family: 'JetBrains Mono', size: 10 }, color: '#94a3b8' }
-                }
-            }
-        }
-    });
-}
-
-// ─── Month Slider ───
-function setupMonthSlider() {
-    const slider = $('month-slider');
-    const valLabel = $('month-slider-val');
-    const headerLabel = $('month-slider-label');
-    const MONTHS = ['All', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    if (!slider) return;
-
-    slider.addEventListener('input', () => {
-        const val = parseInt(slider.value);
-        valLabel.textContent = MONTHS[val];
-        headerLabel.textContent = val === 0 ? 'All Months' : `Focused: ${MONTHS[val]}`;
-
-        if (!chartSeasonality) return;
-
-        if (val === 0) {
-            // Show all months - restore full data
-            const years = Object.keys(state.seasonalityData).map(Number);
-            chartSeasonality.data.datasets.forEach(ds => {
-                const y = parseInt(ds.label);
-                if (state.seasonalityData[y]) {
-                    ds.data = [...state.seasonalityData[y]];
-                }
-            });
-        } else {
-            // Highlight single month — show bar-like emphasis
-            const monthIdx = val - 1;
-            chartSeasonality.data.datasets.forEach(ds => {
-                const y = parseInt(ds.label);
-                if (state.seasonalityData[y]) {
-                    ds.data = state.seasonalityData[y].map((v, i) => i === monthIdx ? v : null);
-                }
-            });
-        }
-        chartSeasonality.update();
-    });
 }
 
 // ══════════════════════════════════════════════════════

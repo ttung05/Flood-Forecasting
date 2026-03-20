@@ -19,12 +19,16 @@ import fs from 'fs';
 import path from 'path';
 import { promises as fsp } from 'fs';
 
-const gridCache = new MemoryCache<GridJSON>(100, 30 * 60 * 1000);
+const gridCache = new MemoryCache<GridJSON>(500, 60 * 60 * 1000);
 
-// Layer name → NPZ band index (matches STACKED_BAND_NAMES order)
+// Layer name → NPZ band index (matches Raw NPZ merger file)
+// x.npy bands: [Rain(T), Rain(T-1), Rain(T-2), SoilMoisture, Tide, DEM, Slope, FlowAcc]
+// y.npy: Label (flood probability)
 const LAYER_TO_BAND_INDEX: Record<string, number> = {
-    rain: 0, soilMoisture: 1, tide: 2, label: 3,
-    dem: 4, slope: 5, flow: 6, landCover: 7,
+    rain: 0, soilMoisture: 3, tide: 4,
+    dem: 5, slope: 6, flow: 7,
+    // label (flood): from y.npy (not in x bands)
+    // landCover: not available in Raw NPZ
 };
 
 let tifFailCount = 0;
@@ -123,55 +127,9 @@ export async function getGrid(params: GridParams): Promise<Result<GridJSON, AppE
     }
 
     // ── Strategy 0.5: Pre-built .gridbin file from Cloudflare R2 ──
-    if (env.USE_PREBUILT_GRID && _r2GetBuffer) {
-        try {
-            const r2BinKey = `grid-bin/grid_${date}_${layer}.gridbin`;
-            // Local disk cache to avoid repeated downloads on slow networks
-            const cacheDir = path.resolve(process.cwd(), '.cache', 'grid-bin');
-            const cachePath = path.join(cacheDir, `grid_${date}_${layer}.gridbin`);
-
-            let buf: Buffer | null = null;
-            try {
-                buf = await fsp.readFile(cachePath);
-                structuredLog('info', 'grid_prebuilt_disk_bin', { region, date, layer, durationMs: Date.now() - t0 });
-            } catch {
-                // ignore cache miss
-            }
-            if (!buf) {
-                buf = await _r2GetBuffer(r2BinKey);
-                // best-effort persist
-                fsp.mkdir(cacheDir, { recursive: true })
-                    .then(() => fsp.writeFile(cachePath, buf!))
-                    .catch(() => { /* ignore */ });
-            }
-
-            const metaLen = buf.readUInt32LE(0);
-            const meta = JSON.parse(buf.toString('utf-8', 4, 4 + metaLen));
-            const data = new Float32Array(buf.buffer, buf.byteOffset + 4 + metaLen, (buf.byteLength - 4 - metaLen) / 4);
-            const gridJson: GridJSON = { ...meta, data };
-            
-            gridCache.set(cacheKey, gridJson);
-            structuredLog('info', 'grid_prebuilt_r2_bin', { region, date, layer, durationMs: Date.now() - t0 });
-            return Ok(gridJson);
-        } catch (err) {
-            structuredLog('warn', 'grid_prebuilt_r2_bin_error', { region, date, layer, error: (err as Error).message });
-        }
-    }
-
-    // ── Strategy 1: Pre-built JSON from R2 ──
-    if (env.USE_PREBUILT_GRID && _r2GetJson) {
-        try {
-            const r2Key = `FloodData/${region}/Grid/grid_${date}_${layer}.json`;
-            const gridJson = await _r2GetJson(r2Key) as GridJSON;
-            if (gridJson && gridJson.v) {
-                gridCache.set(cacheKey, gridJson);
-                structuredLog('info', 'grid_prebuilt', { region, date, layer, durationMs: Date.now() - t0 });
-                return Ok(gridJson);
-            }
-        } catch {
-            // Pre-built not available — fall through to TIF decode
-        }
-    }
+    // ── Strategy 0.5 + Strategy 1: DISABLED ──
+    // Pre-built gridbin and JSON do not exist for Raw NPZ (visualize/) data.
+    // Skipping them saves ~400-800ms per request (2 failed R2 calls).
 
     // ── Validate layer & region (shared by Strategy 2 + 3) ──
     const layerInfo = LAYER_FOLDER_MAP[layer];
@@ -183,64 +141,9 @@ export async function getGrid(params: GridParams): Promise<Result<GridJSON, AppE
         return Err(AppErrors.validation(`Unknown region: ${region}`));
     }
 
-    // ── Strategy 2: On-the-fly decode from TIF (with 8s timeout + circuit breaker) ──
-    if (_tifKey && _getCachedTifImage && tifFailCount < TIF_FAIL_THRESHOLD) {
-    try {
-        const r2Key = _tifKey(region, layerInfo, date);
-        const img = await Promise.race([
-            _getCachedTifImage(r2Key),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('TIF fetch timeout (8s)')), 8000)),
-        ]);
-
-        const width = img.getWidth();
-        const height = img.getHeight();
-        const rasterData = await img.readRasters();
-        const band = rasterData[0] as Float64Array;
-
-        if (!band || band.length === 0) {
-            return Err(AppErrors.notFound(`No raster data for ${layer} on ${date}`));
-        }
-
-        const nodataStr = (img.fileDirectory as any).GDAL_NODATA;
-        const nod = nodataStr !== undefined ? parseFloat(nodataStr) : -9999;
-        const bbox = img.getBoundingBox();
-
-        const total = height * width;
-        const data = new Float32Array(total);
-        for (let i = 0; i < total; i++) {
-            const raw = band[i]!;
-            if (raw === null || raw === undefined || raw === nod || isNaN(raw) || raw <= -9998) {
-                data[i] = -9999;
-            } else {
-                data[i] = Math.round(raw * 100) / 100;
-            }
-        }
-
-        const gridJson: GridJSON = {
-            v: 1,
-            region,
-            date,
-            layer,
-            bounds: { n: bbox[3], s: bbox[1], e: bbox[2], w: bbox[0] },
-            size: { r: height, c: width },
-            scale: layerInfo.scale,
-            nodata: -9999,
-            data,
-        };
-
-        gridCache.set(cacheKey, gridJson);
-        tifFailCount = 0;
-        structuredLog('info', 'grid_tif_decode', {
-            region, date, layer,
-            rasterSize: `${width}x${height}`,
-            durationMs: Date.now() - t0,
-        });
-        return Ok(gridJson);
-    } catch (err) {
-        tifFailCount++;
-        structuredLog('warn', 'grid_tif_error', { region, date, layer, failCount: tifFailCount, error: (err as Error).message });
-    }
-    } // end if (_tifKey && _getCachedTifImage)
+    // ── Strategy 2: DISABLED ──
+    // TIF files do not exist for Raw NPZ (visualize/) data.
+    // Skipping saves ~200-500ms per request (1 failed R2 request).
 
     // ── Strategy 3: Local NPZ file decode (and R2 fallback) ──
     try {
@@ -250,6 +153,36 @@ export async function getGrid(params: GridParams): Promise<Result<GridJSON, AppE
             npz = await loadNpzFromR2(date);
         }
         if (npz) {
+            // Special handling: Label (flood) is in y.npy (not x.npy bands) in Raw NPZ
+            if (layer === 'label') {
+                const { y, height, width } = npz;
+                const total = height * width;
+                const data = new Float32Array(total);
+                for (let i = 0; i < total; i++) {
+                    const raw = y[i]!;
+                    if (raw === undefined || isNaN(raw)) {
+                        data[i] = -9999;
+                    } else {
+                        // Flood threshold: value <= -20 → flooded (1), value > -20 → not flooded (0)
+                        data[i] = raw <= -20 ? 1 : 0;
+                    }
+                }
+                const regionBounds = REGION_BOUNDS[region]!;
+                const gridJson: GridJSON = {
+                    v: 1, region, date, layer,
+                    bounds: { n: regionBounds.north, s: regionBounds.south, e: regionBounds.east, w: regionBounds.west },
+                    size: { r: height, c: width }, scale: 1, nodata: -9999, data,
+                };
+                gridCache.set(cacheKey, gridJson);
+                structuredLog('info', 'grid_npz_decode', { region, date, layer, source: 'y.npy', rasterSize: `${width}x${height}`, durationMs: Date.now() - t0 });
+                return Ok(gridJson);
+            }
+
+            // landCover not available in Raw NPZ
+            if (layer === 'landCover') {
+                return Err(AppErrors.notFound(`Layer "landCover" not available in Raw NPZ`));
+            }
+
             const bandIdx = LAYER_TO_BAND_INDEX[layer];
             if (bandIdx === undefined || bandIdx >= npz.bands) {
                 return Err(AppErrors.validation(`Layer "${layer}" not available in NPZ (bands=${npz.bands})`));
@@ -263,10 +196,11 @@ export async function getGrid(params: GridParams): Promise<Result<GridJSON, AppE
             const data = new Float32Array(total);
             for (let i = 0; i < total; i++) {
                 const raw = x[bandOffset + i]!;
-                if (raw === undefined || isNaN(raw) || raw < 0) {
+                if (raw === undefined || isNaN(raw)) {
                     data[i] = -9999;
                 } else {
-                    data[i] = bandName ? denormalizeNpz(bandName, raw) : raw;
+                    // Raw NPZ (visualize folder) already contains physical values — no denormalization needed
+                    data[i] = Math.round(raw * 10000) / 10000;
                 }
             }
 

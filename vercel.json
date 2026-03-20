@@ -1,5 +1,14 @@
 {
     "version": 2,
+    "buildCommand": "npm run build",
+    "installCommand": "npm install",
+    "functions": {
+        "api/index.js": {
+            "maxDuration": 30,
+            "memory": 1024,
+            "includeFiles": "dist/**"
+        }
+    },
     "rewrites": [
         {
             "source": "/api/(.*)",
@@ -12,11 +21,28 @@
     ],
     "headers": [
         {
-            "source": "/(.*)",
+            "source": "/api/(.*)",
             "headers": [
                 {
                     "key": "Access-Control-Allow-Origin",
                     "value": "*"
+                },
+                {
+                    "key": "Access-Control-Allow-Methods",
+                    "value": "GET, POST, OPTIONS"
+                },
+                {
+                    "key": "Access-Control-Allow-Headers",
+                    "value": "Content-Type"
+                }
+            ]
+        },
+        {
+            "source": "/frontend/(.*)",
+            "headers": [
+                {
+                    "key": "Cache-Control",
+                    "value": "public, max-age=3600, stale-while-revalidate=600"
                 }
             ]
         }

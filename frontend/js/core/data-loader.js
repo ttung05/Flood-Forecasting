@@ -9,9 +9,10 @@
 class DataLoader {
     constructor() {
         this.cache = new Map();
-        this.maxCacheSize = 200; // Needs to hold: 6 years of seasonality + timeline + pixel data + ML
+        this.maxCacheSize = 500; // Timeline + pixel history + heatmap + ML, etc.
         this.currentRegion = 'DaNang';
         this.availableDates = null;  // { availableDates, totalDays, dateRange, ... }
+        this._inflight = new Map(); // In-flight request deduplication
     }
 
     // ----------------------------------------------------------
@@ -23,14 +24,54 @@ class DataLoader {
      * Throw lỗi nếu !success, trả về data nếu thành công.
      * Supports timeout via AbortController (default: 120s).
      */
-    async _fetch(url, timeoutMs = 120000) {
+    async _fetch(url, timeoutMs = 60000) {
+        // In-flight deduplication: reuse pending request for same URL
+        if (this._inflight.has(url)) {
+            return this._inflight.get(url);
+        }
+
+        const promise = (async () => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                const envelope = await response.json();
+
+                if (!envelope.success) {
+                    const errMsg = envelope.error?.message || `HTTP ${response.status}`;
+                    throw new Error(errMsg);
+                }
+                return envelope.data;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
+                }
+                throw err;
+            } finally {
+                clearTimeout(timer);
+                this._inflight.delete(url);
+            }
+        })();
+
+        this._inflight.set(url, promise);
+        return promise;
+    }
+
+    /**
+     * POST JSON, unwrap envelope (same contract as _fetch).
+     */
+    async _postJson(url, body, timeoutMs = 120000) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-
         try {
-            const response = await fetch(url, { signal: controller.signal });
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
             const envelope = await response.json();
-
             if (!envelope.success) {
                 const errMsg = envelope.error?.message || `HTTP ${response.status}`;
                 throw new Error(errMsg);
@@ -202,6 +243,35 @@ class DataLoader {
             return data;
         } catch (error) {
             console.warn(`⚠️ No pixel history at [${lat},${lng}]: ${error.message}`);
+            return null;
+        }
+    }
+
+    /**
+     * Bulk pixel read in one HTTP round-trip (no server-side metadata flatten).
+     * Body: { lat, lng, region, dates: string[] }
+     * @returns {Array<{date, rainfall, soilMoisture, ...}>} or null
+     */
+    async loadPixelBatch(lat, lng, region, dates) {
+        if (!dates || dates.length === 0) return null;
+        const cacheKey = `pixbatch_${region}_${lat}_${lng}_${dates[0]}_${dates[dates.length - 1]}_${dates.length}`;
+        const cached = this._cacheGet(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const data = await this._postJson(`${window.API_BASE_URL}/api/pixel/batch`, {
+                lat,
+                lng,
+                region,
+                dates,
+            });
+            const items = data?.items;
+            if (!Array.isArray(items)) return null;
+            this._cacheSet(cacheKey, items);
+            console.log(`✅ Pixel batch [${lat}, ${lng}]: ${items.length} dates`);
+            return items;
+        } catch (error) {
+            console.warn(`⚠️ Pixel batch failed: ${error.message}`);
             return null;
         }
     }

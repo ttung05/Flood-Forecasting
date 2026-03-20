@@ -368,5 +368,31 @@ services:
           memory: 512M
           cpus: '1.0'
 
+  # ══════════════════════════════════════════════════
+  #  Web App (Node.js Backend + Static Frontend)
+  # ══════════════════════════════════════════════════
+  web-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    restart: always
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://localhost:8000/api/dates/DaNang', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+
 volumes:
   postgres-db-volume:

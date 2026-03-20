@@ -221,7 +221,7 @@ const CLICK_DEBOUNCE_MS = 150;
 
 // Inference-ready: Cache last N pixel results to avoid duplicate API calls
 const _pixelResultCache = new Map();
-const PIXEL_RESULT_CACHE_MAX = 50;
+const PIXEL_RESULT_CACHE_MAX = 200;
 
 // Request Deduplication: Reuse in-flight fetch promises (same URL = same promise)
 const _inflightRequests = new Map();
@@ -827,8 +827,8 @@ function createGridCanvasOverlay(gridData) {
 
                     if (w < 1 || h < 1) continue;
 
-                    const opacity = Math.max(0.15, Math.min(0.8, valNorm));
-                    ctx.fillStyle = `rgba(239, 68, 68, ${opacity.toFixed(2)})`;
+                    // Binary flood display: value=1 → flooded (blue), value=0 → not flooded
+                    ctx.fillStyle = 'rgba(30, 100, 220, 0.50)';
                     ctx.fillRect(x, y, w, h);
                 }
             }
@@ -875,10 +875,11 @@ function createGridImageOverlay(gridData, boundsObj) {
             px[o + 0] = px[o + 1] = px[o + 2] = px[o + 3] = 0;
             continue;
         }
-        px[o + 0] = 239;
-        px[o + 1] = 68;
-        px[o + 2] = 68;
-        px[o + 3] = Math.max(40, Math.min(255, Math.floor(vn * 200 + 55)));
+        // Binary flood display: value=1 → flooded (blue), value=0 → transparent
+        px[o + 0] = 30;
+        px[o + 1] = 100;
+        px[o + 2] = 220;
+        px[o + 3] = 128;
     }
 
     ctx.putImageData(img, 0, 0);

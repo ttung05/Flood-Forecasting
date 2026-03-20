@@ -12,12 +12,15 @@
 import type { Result } from '../../shared/types/result';
 import type { AppError } from '../../shared/types/result';
 import { Ok, Err, AppErrors } from '../../shared/types/result';
+import { createHash } from 'crypto';
 import { REGION_BOUNDS } from '../../shared/types/common';
 import * as pixelService from './pixel.service';
 import { structuredLog } from '../../shared/middleware/tracing';
+import { MemoryCache } from '../../shared/cache/memory-cache';
+import { preloadNpzDates } from '../../shared/legacy/npz-reader';
 
-const MAX_BATCH_SIZE = 60; // Max dates per request
-const BATCH_CONCURRENCY = 10; // Concurrent pixel reads within a batch
+const MAX_BATCH_SIZE = 60; // Max unique dates per request
+const BATCH_CONCURRENCY = 40; // Concurrent pixel reads (NPZ coalesces same-date downloads)
 
 export interface BatchPixelRequest {
     lat: number;
@@ -51,6 +54,15 @@ export interface BatchPixelResponse {
     };
 }
 
+/** Repeat loads skip R2/NPZ work */
+const batchResponseCache = new MemoryCache<BatchPixelResponse>(200, 15 * 60 * 1000);
+
+function batchResultCacheKey(region: string, lat: number, lng: number, dates: string[]): string {
+    const sorted = [...dates].sort().join(',');
+    const h = createHash('sha256').update(sorted).digest('hex').slice(0, 20);
+    return `pb_${region}_${lat.toFixed(4)}_${lng.toFixed(4)}_${dates.length}_${h}`;
+}
+
 export async function getBatchPixels(
     req: BatchPixelRequest
 ): Promise<Result<BatchPixelResponse, AppError>> {
@@ -69,15 +81,35 @@ export async function getBatchPixels(
         return Err(AppErrors.validation('dates array is required and must not be empty'));
     }
 
-    if (dates.length > MAX_BATCH_SIZE) {
+    const uniqueDates = [...new Set(dates)].sort();
+    if (uniqueDates.length > MAX_BATCH_SIZE) {
         return Err(AppErrors.validation(`Maximum ${MAX_BATCH_SIZE} dates per batch request`));
     }
+
+    const cacheKey = batchResultCacheKey(region, lat, lng, uniqueDates);
+    const cached = batchResponseCache.get(cacheKey);
+    if (cached) {
+        const cacheMs = Date.now() - t0;
+        structuredLog('info', 'pixel_batch_cached', {
+            region, lat, lng, requested: uniqueDates.length, durationMs: cacheMs,
+        });
+        return Ok({
+            ...cached,
+            metadata: {
+                ...cached.metadata,
+                responseTimeMs: cacheMs,
+            },
+        });
+    }
+
+    // Prefetch all needed NPZ files in parallel before processing (all at once)
+    await preloadNpzDates(uniqueDates, 14);
 
     // Process dates with controlled concurrency
     const items: BatchPixelItem[] = [];
 
-    for (let i = 0; i < dates.length; i += BATCH_CONCURRENCY) {
-        const batch = dates.slice(i, i + BATCH_CONCURRENCY);
+    for (let i = 0; i < uniqueDates.length; i += BATCH_CONCURRENCY) {
+        const batch = uniqueDates.slice(i, i + BATCH_CONCURRENCY);
         const batchResults = await Promise.all(
             batch.map(async (date) => {
                 const result = await pixelService.getPixel({
@@ -124,20 +156,22 @@ export async function getBatchPixels(
     const elapsed = Date.now() - t0;
     structuredLog('info', 'pixel_batch', {
         region, lat, lng,
-        requested: dates.length,
+        requested: uniqueDates.length,
         returned: items.length,
         durationMs: elapsed,
     });
 
-    return Ok({
+    const payload: BatchPixelResponse = {
         lat,
         lng,
         region,
         items,
         metadata: {
-            requested: dates.length,
+            requested: uniqueDates.length,
             returned: items.length,
             responseTimeMs: elapsed,
         },
-    });
+    };
+    batchResponseCache.set(cacheKey, payload);
+    return Ok(payload);
 }

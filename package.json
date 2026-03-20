@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "npx tsx watch src/index.ts",
     "build": "npx tsc",
+    "vercel-build": "npm run build",
     "typecheck": "npx tsc --noEmit",
     "start": "node dist/index.js",
     "prebuild-grids": "npx tsx scripts/build/prebuild-grids.ts"

@@ -360,6 +360,16 @@ function showDateError(input, errorMsg, message) {
 // ─────────────────────────────────────────────────────────
 // 4. UNIFIED STATE DISPATCHER
 // ─────────────────────────────────────────────────────────
+
+/** Offset a YYYY-MM-DD date string by N days, returning YYYY-MM-DD or null */
+function _offsetDateStr(dateStr, offsetDays) {
+    try {
+        const d = new Date(dateStr + 'T00:00:00Z');
+        d.setUTCDate(d.getUTCDate() + offsetDays);
+        return d.toISOString().split('T')[0];
+    } catch { return null; }
+}
+
 async function selectUnifiedDate(dateStr) {
     selectedCalendarDate = dateStr;
     const currentRegion = window.currentRegion || 'DaNang';
@@ -395,6 +405,15 @@ async function selectUnifiedDate(dateStr) {
     // Call External Handlers
     if (typeof updateHeatmap === 'function') updateHeatmap(dateStr, currentRegion);
     if (typeof updateTimeline === 'function') updateTimeline(dateStr);
+
+    // Background: warmup NPZ cho ngày liền kề (fire-and-forget)
+    // Preload ±1, ±2 ngày để khi chuyển ngày tiếp theo, data đã sẵn trong cache
+    [1, -1, 2, -2].forEach(offset => {
+        const adjDate = _offsetDateStr(dateStr, offset);
+        if (adjDate) {
+            fetch(`${window.API_BASE_URL || ''}/api/warmup/${currentRegion}/${adjDate}`).catch(() => {});
+        }
+    });
 
     document.dispatchEvent(new CustomEvent('dateChanged', { detail: { date: dateStr } }));
 

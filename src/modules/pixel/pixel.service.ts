@@ -24,7 +24,10 @@ import { structuredLog, nextTraceId } from '../../shared/middleware/tracing';
 import { readPixelFromNpz } from '../../shared/legacy/npz-reader';
 
 // ── Single unified pixel cache (no duplicate caching with r2-raster) ─
-const pixelCache = new MemoryCache<any>(10_000, 60 * 60 * 1000);
+const pixelCache = new MemoryCache<any>(30_000, 2 * 60 * 60 * 1000);
+
+// Track dates where Stacked COG files don't exist — avoid retrying
+const _cogFailedDates = new Set<string>();
 
 // ── Dependencies (injected from index.ts) ──────────────────────────
 let _getCachedTifImage: ((key: string) => Promise<any>) | null = null;
@@ -196,7 +199,7 @@ export async function getPixel(params: PixelParams): Promise<Result<PixelData, A
     let dataSource: 'npz' | 'stacked_cog' | 'legacy_8tif' = 'npz';
     let values: Record<string, number | null> | null = null;
 
-    // Strategy 0: NPZ files on R2 (primary — actual data format in bucket)
+    // Strategy 0: NPZ (primary — has disk cache: first download ~3s, subsequent ~5ms)
     try {
         const npzResult = await readPixelFromNpz(region, date, lat, lng);
         if (npzResult) {
@@ -207,12 +210,20 @@ export async function getPixel(params: PixelParams): Promise<Result<PixelData, A
         structuredLog('warn', 'pixel_npz_failed', { region, date, traceId, error: (e as Error).message });
     }
 
-    // Strategy 1: Stacked COG (if NPZ unavailable)
-    if (!values) {
-        const stackedResult = await readFromStackedCOG(region, date, lat, lng);
-        if (stackedResult) {
-            values = stackedResult;
-            dataSource = 'stacked_cog';
+    // Strategy 1: Stacked COG (fallback — only works if stacked TIF files exist on R2)
+    if (!values && !_cogFailedDates.has(date)) {
+        try {
+            const stackedResult = await readFromStackedCOG(region, date, lat, lng);
+            if (stackedResult) {
+                values = stackedResult;
+                dataSource = 'stacked_cog';
+            } else {
+                // Stacked file doesn't exist for this date — skip next time
+                _cogFailedDates.add(date);
+            }
+        } catch (e) {
+            _cogFailedDates.add(date);
+            structuredLog('warn', 'pixel_cog_failed', { region, date, traceId, error: (e as Error).message });
         }
     }
 
@@ -233,7 +244,7 @@ export async function getPixel(params: PixelParams): Promise<Result<PixelData, A
     if (!values) {
         structuredLog('warn', 'pixel_no_data', {
             region, date, lat, lng, traceId, source: dataSource,
-            npzKey: `training/2020-2025/Data_Training_Soft_NPZ/Sample_${date}.npz`,
+            npzKey: `visualize/2020-2025/Data_Training_Raw_NPZ/Sample_${date}.npz`,
         });
         return Err(AppErrors.notFound(`No data for ${region} on ${date}`));
     }
@@ -246,7 +257,7 @@ export async function getPixel(params: PixelParams): Promise<Result<PixelData, A
         return Err(AppErrors.notFound(`No data for ${region} on ${date}`));
     }
 
-    const floodRisk = deriveFloodRisk(values.flood ?? null, values.rainfall ?? null);
+    const floodRisk = deriveFloodRisk(values.flood ?? null, values.rainfall ?? null, values.soilMoisture ?? null);
     const elapsed = Date.now() - t0;
 
     structuredLog('info', 'pixel_response', {

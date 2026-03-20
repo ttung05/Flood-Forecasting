@@ -10,8 +10,9 @@ import { Ok, Err, AppErrors } from '../../shared/types/result';
 import * as metadataService from '../metadata/metadata.service';
 import * as pixelService from './pixel.service';
 import { structuredLog } from '../../shared/middleware/tracing';
-import { REGION_BOUNDS, Region } from '../../shared/types/common';
+import { REGION_BOUNDS } from '../../shared/types/common';
 import { MemoryCache } from '../../shared/cache/memory-cache';
+import { preloadNpzDates } from '../../shared/legacy/npz-reader';
 
 export interface DailyPixelData {
     date: string;
@@ -26,6 +27,9 @@ export interface DailyPixelData {
     landCover: number | null;
 }
 
+/** Increased capacity & TTL — same coordinate + range hits repeat dashboard loads */
+const historyResultCache = new MemoryCache<DailyPixelData[]>(400, 30 * 60 * 1000);
+
 export async function getPixelHistory(region: string, lat: number, lng: number, startDateStr: string, endDateStr: string): Promise<Result<DailyPixelData[], AppError>> {
     const t0 = Date.now();
     const bounds = REGION_BOUNDS[region];
@@ -35,6 +39,13 @@ export async function getPixelHistory(region: string, lat: number, lng: number, 
 
     if (lat > bounds.north || lat < bounds.south || lng < bounds.west || lng > bounds.east) {
         return Err(AppErrors.validation(`Coordinates ${lat}, ${lng} are outside region boundary`));
+    }
+
+    const histCacheKey = `h_${region}_${lat.toFixed(4)}_${lng.toFixed(4)}_${startDateStr}_${endDateStr}`;
+    const histHit = historyResultCache.get(histCacheKey);
+    if (histHit) {
+        structuredLog('info', 'pixel_history_cached', { region, lat, lng, days: histHit.length, durationMs: Date.now() - t0 });
+        return Ok(histHit);
     }
 
     // Get all available dates
@@ -63,9 +74,12 @@ export async function getPixelHistory(region: string, lat: number, lng: number, 
         return Ok([]);
     }
 
+    // Prefetch all needed NPZ files in parallel before processing
+    await preloadNpzDates(rangeDates, 8);
+
     // Fetch full pixel data for each date using pixelService
     // This reads from stacked COG / legacy TIF which has actual data
-    const CONCURRENCY = 15;
+    const CONCURRENCY = 40; // NPZ reads are fast after preload, allow more parallelism
     const results: DailyPixelData[] = [];
 
     for (let i = 0; i < rangeDates.length; i += CONCURRENCY) {
@@ -116,6 +130,7 @@ export async function getPixelHistory(region: string, lat: number, lng: number, 
 
     structuredLog('info', 'pixel_history', { region, lat, lng, days: results.length, durationMs: Date.now() - t0 });
 
+    historyResultCache.set(histCacheKey, results);
     return Ok(results);
 }
 

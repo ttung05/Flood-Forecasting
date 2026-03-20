@@ -15,10 +15,39 @@ import { MemoryCache } from '../cache/memory-cache';
 import { structuredLog } from '../middleware/tracing';
 import { REGION_BOUNDS, STACKED_BAND_NAMES } from '../types/common';
 
-// NPZ R2 key pattern
-const NPZ_PREFIX = 'training/2020-2025/Data_Training_Soft_NPZ';
+// NPZ R2 key pattern — use 'visualize' (raw physical values) instead of 'training' (normalized)
+const NPZ_PREFIX = 'visualize/2020-2025/Data_Training_Raw_NPZ';
 function npzKey(date: string): string {
     return `${NPZ_PREFIX}/Sample_${date}.npz`;
+}
+
+// ── Singleton S3 Client (avoid recreating per request — saves ~500ms each) ──
+let _s3Client: S3Client | null = null;
+function getS3Client(): S3Client {
+    if (_s3Client) return _s3Client;
+    const env = loadEnv();
+    _s3Client = new S3Client({
+        region: 'auto',
+        endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+            accessKeyId: env.R2_ACCESS_KEY_ID!,
+            secretAccessKey: env.R2_SECRET_ACCESS_KEY!,
+        },
+    });
+    return _s3Client;
+}
+
+// ── NPZ Disk Cache (survives server restarts) ──
+const NPZ_DISK_CACHE_DIR = path.resolve(process.cwd(), 'data', 'npz_cache');
+
+function ensureDiskCacheDir(): void {
+    if (!fs.existsSync(NPZ_DISK_CACHE_DIR)) {
+        fs.mkdirSync(NPZ_DISK_CACHE_DIR, { recursive: true });
+    }
+}
+
+function diskCachePath(date: string): string {
+    return path.join(NPZ_DISK_CACHE_DIR, `Sample_${date}.npz`);
 }
 
 interface ParsedNpz {
@@ -30,8 +59,8 @@ interface ParsedNpz {
 }
 
 // Cache parsed NPZ data (each ~25MB raw, ~32MB parsed)
-// Keep max 5 dates in memory (~160MB)
-const npzCache = new MemoryCache<ParsedNpz>(5, 30 * 60 * 1000);
+// Larger cache reduces repeat downloads when history/batch touches many consecutive dates (~960MB max @ 30 entries)
+const npzCache = new MemoryCache<ParsedNpz>(30, 2 * 60 * 60 * 1000);
 const pendingLoads = new Map<string, Promise<ParsedNpz | null>>();
 
 /**
@@ -89,7 +118,7 @@ function parseNpy(buf: Buffer): { data: Float32Array; shape: number[] } {
 import fs from 'fs';
 import path from 'path';
 
-const LOCAL_NPZ_DIR = path.resolve(process.cwd(), 'data', 'training', 'Data_Training_Soft_NPZ');
+const LOCAL_NPZ_DIR = path.resolve(process.cwd(), 'data', 'training', 'Data_Training_Raw_NPZ');
 
 export async function loadNpzFromLocal(date: string): Promise<ParsedNpz | null> {
     const cacheKey = `npz_${date}`;
@@ -163,24 +192,18 @@ export async function listR2NpzDates(): Promise<string[]> {
     const cached = r2DatesCache.get(cacheKey);
     if (cached) return cached;
 
-    const env = loadEnv();
-    if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-        return [];
-    }
-
-    const s3 = new S3Client({
-        region: 'auto',
-        endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        credentials: {
-            accessKeyId: env.R2_ACCESS_KEY_ID,
-            secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        },
-    });
+    const s3 = getS3Client();
 
     const dates: string[] = [];
     let token: string | undefined;
 
     try {
+        const env = loadEnv(); // Load env here to get bucket name
+        if (!env.R2_BUCKET_NAME) {
+            structuredLog('error', 'r2_npz_dates_error', { error: 'R2_BUCKET_NAME not set' });
+            return [];
+        }
+
         do {
             const res = await s3.send(new ListObjectsV2Command({
                 Bucket: env.R2_BUCKET_NAME,
@@ -249,6 +272,7 @@ export async function getLocalRainfallTotal(date: string, region: string): Promi
 
 /**
  * Download and parse NPZ from R2.
+ * Disk cache: check local file first, save after download.
  */
 export async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
     const key = npzKey(date);
@@ -262,37 +286,50 @@ export async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
     }
 
     const loadPromise = (async (): Promise<ParsedNpz | null> => {
-        const env = loadEnv();
-        if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
-            structuredLog('error', 'npz_no_creds', { key });
-            return null;
-        }
-
-        const s3 = new S3Client({
-            region: 'auto',
-            endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-            credentials: {
-                accessKeyId: env.R2_ACCESS_KEY_ID,
-                secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-            },
-        });
-
         try {
-            structuredLog('info', 'npz_download_start', { key });
-            const t0 = Date.now();
-            const resp = await s3.send(new GetObjectCommand({
-                Bucket: env.R2_BUCKET_NAME,
-                Key: key,
-            }));
+            let buf: Buffer;
+            const diskPath = diskCachePath(date);
 
-            const arr = await resp.Body?.transformToByteArray();
-            if (!arr) {
-                structuredLog('error', 'npz_empty_body', { key });
-                return null;
+            // Strategy A: Read from disk cache (instant, ~5ms)
+            if (fs.existsSync(diskPath)) {
+                const t0 = Date.now();
+                buf = fs.readFileSync(diskPath);
+                structuredLog('info', 'npz_disk_cache_hit', { date, bytes: buf.byteLength, durationMs: Date.now() - t0 });
+            } else {
+                // Strategy B: Download from R2 and save to disk
+                const env = loadEnv();
+                if (!env.R2_ACCOUNT_ID || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+                    structuredLog('error', 'npz_no_creds', { key });
+                    return null;
+                }
+
+                structuredLog('info', 'npz_download_start', { key });
+                const t0 = Date.now();
+                const s3 = getS3Client();
+                const resp = await s3.send(new GetObjectCommand({
+                    Bucket: env.R2_BUCKET_NAME,
+                    Key: key,
+                }));
+
+                const arr = await resp.Body?.transformToByteArray();
+                if (!arr) {
+                    structuredLog('error', 'npz_empty_body', { key });
+                    return null;
+                }
+
+                buf = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+                const downloadMs = Date.now() - t0;
+                structuredLog('info', 'npz_downloaded', { key, downloadMs, bytes: buf.byteLength });
+
+                // Save to disk cache (background, non-blocking)
+                try {
+                    ensureDiskCacheDir();
+                    fs.writeFileSync(diskPath, buf);
+                    structuredLog('info', 'npz_disk_cache_saved', { date, bytes: buf.byteLength });
+                } catch (diskErr) {
+                    structuredLog('warn', 'npz_disk_cache_save_error', { date, error: (diskErr as Error).message });
+                }
             }
-
-            const buf = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
-            const downloadMs = Date.now() - t0;
 
             // Parse zip
             const zip = new AdmZip(buf);
@@ -334,7 +371,7 @@ export async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
 
             npzCache.set(cacheKey, result);
             structuredLog('info', 'npz_loaded', {
-                key, downloadMs, bands, height, width,
+                key, bands, height, width,
                 xLen: xData.length, yLen: result.y.length,
             });
             return result;
@@ -353,28 +390,13 @@ export async function loadNpzFromR2(date: string): Promise<ParsedNpz | null> {
 /**
  * De-normalization from GEE unitScale ranges.
  *
- * GEE pipeline (GEE.py / copernicus_tide.py):
- *   rainfall:     unitScale(0, 200)   → mm
- *   soilMoisture: unitScale(0, 0.5)   → m³/m³  (×100 for %)
- *   tide:         unitScale(-1.5, 1.5) → m
- *   flood:        binary probability   → 0-1 (no change)
- *   dem:          NOT real elevation in NPZ (spatially constant, varies by date)
- *   slope:        unitScale(0, 90)     → degrees (assumed)
- *   flow:         log10 + unitScale(0, 5) → log-scale accumulation
- *   landCover:    normalized class     → 0-1 index
+ * NOTE: Using Raw NPZ (visualize folder) — values are already physical.
+ * This function now passes through raw values without transformation.
+ * Kept for API compatibility with readPixelFromNpz.
  */
 function denormalize(bandName: string, raw: number): number {
-    switch (bandName) {
-        case 'rainfall':     return raw * 200;                     // mm
-        case 'soilMoisture': return raw * 0.5;                     // m³/m³ (volumetric)
-        case 'tide':         return raw * 3.0 - 1.5;              // meters
-        case 'slope':        return raw * 90;                      // degrees
-        case 'flow':         return raw > 0 ? Math.pow(10, raw * 5) - 1 : 0; // accumulation cells
-        case 'dem':          return raw;                           // keep as index (not real elevation)
-        case 'landCover':    return raw;                           // keep as index
-        case 'flood':        return raw;                           // probability 0-1
-        default:             return raw;
-    }
+    // Raw NPZ already contains physical values — no transformation needed
+    return raw;
 }
 
 /**
@@ -393,7 +415,7 @@ export async function readPixelFromNpz(
     const npz = await loadNpzFromR2(date);
     if (!npz) return null;
 
-    const { x, bands, height, width } = npz;
+    const { x, y, bands, height, width } = npz;
 
     // Map lat/lng to row/col
     const col = Math.floor((lng - bounds.west) / (bounds.east - bounds.west) * width);
@@ -409,10 +431,76 @@ export async function readPixelFromNpz(
         if (val === undefined || isNaN(val)) {
             result[bandName] = null;
         } else {
-            const physical = denormalize(bandName, val);
-            result[bandName] = parseFloat(physical.toFixed(4));
+            // Raw NPZ already has physical values — pass through
+            result[bandName] = parseFloat(val.toFixed(4));
+        }
+    }
+
+    // Flood label comes from y.npy (separate array) in Raw NPZ
+    if (y && y.length > 0) {
+        const floodIdx = row * width + col;
+        const floodVal = y[floodIdx];
+        if (floodVal !== undefined && !isNaN(floodVal)) {
+            // y.npy contains raw values (can be large negatives like -19.62 for flooded areas)
+            // Convert to binary: value <= -30 → 1 (flooded), else → 0 (not flooded)
+            // This matches grid.service.ts logic for label layer
+            result['flood'] = floodVal <= -30 ? 1 : 0;
+        } else {
+            result['flood'] = null;
         }
     }
 
     return result;
+}
+
+/**
+ * Preload multiple NPZ files in parallel (for batch/history requests).
+ * This avoids serial downloads when processing many dates.
+ * @param dates - Array of date strings to preload
+ * @param concurrency - Max concurrent downloads (default 6)
+ */
+export async function preloadNpzDates(dates: string[], concurrency = 14): Promise<void> {
+    // Filter out dates that are already cached
+    const uncachedDates = dates.filter(d => !npzCache.get(`npz_${d}`) && !pendingLoads.has(`npz_${d}`));
+    if (uncachedDates.length === 0) return;
+
+    structuredLog('info', 'npz_preload_start', { count: uncachedDates.length, total: dates.length });
+    const t0 = Date.now();
+
+    for (let i = 0; i < uncachedDates.length; i += concurrency) {
+        const batch = uncachedDates.slice(i, i + concurrency);
+        await Promise.allSettled(
+            batch.map(date => {
+                // Try local first, then R2
+                return loadNpzFromLocal(date).then(result => {
+                    if (!result) return loadNpzFromR2(date);
+                    return result;
+                });
+            })
+        );
+    }
+
+    structuredLog('info', 'npz_preload_done', {
+        preloaded: uncachedDates.length,
+        durationMs: Date.now() - t0,
+    });
+}
+
+/**
+ * Preload NPZ files for adjacent dates (±count days).
+ * Fire-and-forget: runs in background to warm cache for date switching.
+ * @param date - Center date (YYYY-MM-DD)
+ * @param count - Number of days before and after to preload (default 2)
+ */
+export async function preloadAdjacentNpz(date: string, count = 2): Promise<void> {
+    const dates: string[] = [];
+    const d = new Date(date + 'T00:00:00Z');
+    for (let i = -count; i <= count; i++) {
+        if (i === 0) continue; // Skip current date (already loaded)
+        const adj = new Date(d);
+        adj.setUTCDate(adj.getUTCDate() + i);
+        dates.push(adj.toISOString().split('T')[0]!);
+    }
+    // Low concurrency to avoid overwhelming R2 while user is browsing
+    await preloadNpzDates(dates, 3).catch(() => {});
 }

@@ -38,16 +38,16 @@ const R2_PUBLIC_BASE = env.R2_PUBLIC_URL
 
 // ── Caches ──────────────────────────────────────────────────────────
 // GeoTIFF source objects (headers + IFD already parsed, supports Range reads)
-const tifSourceCache = new MemoryCache<GeoTIFF.GeoTIFF>(200, 3600 * 1000);
+const tifSourceCache = new MemoryCache<GeoTIFF.GeoTIFF>(400, 2 * 3600 * 1000);
 // Presigned GET URLs (avoid regenerating per request)
 // Keep slightly below presign expiry to avoid serving expired URLs.
-const signedUrlCache = new MemoryCache<string>(500, 50 * 60 * 1000);
+const signedUrlCache = new MemoryCache<string>(800, 50 * 60 * 1000);
 // Track warmups to avoid repeated work
-const warmupCache = new MemoryCache<boolean>(500, 60 * 60 * 1000);
+const warmupCache = new MemoryCache<boolean>(800, 2 * 60 * 60 * 1000);
 // Legacy: full GeoTIFFImage objects (fallback when R2_PUBLIC_URL not set)
-const tifImageCache = new MemoryCache<GeoTIFF.GeoTIFFImage>(200, 3600 * 1000);
+const tifImageCache = new MemoryCache<GeoTIFF.GeoTIFFImage>(400, 2 * 3600 * 1000);
 // Pixel results (L1 cache)
-const pixelCache = new MemoryCache<number | null>(20_000, 3600 * 1000);
+const pixelCache = new MemoryCache<number | null>(50_000, 2 * 3600 * 1000);
 
 // ── Dedup: prevent duplicate in-flight requests for same key ────────
 const pendingSourceOpens = new Map<string, Promise<GeoTIFF.GeoTIFF>>();

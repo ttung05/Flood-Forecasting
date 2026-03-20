@@ -3,6 +3,7 @@ import * as metadataService from '../metadata/metadata.service';
 import * as gridService from '../grid/grid.service';
 import { REGION_BOUNDS, Region } from '../../shared/types/common';
 import { structuredLog } from '../../shared/middleware/tracing';
+import { MemoryCache } from '../../shared/cache/memory-cache';
 
 export interface RegionHistoryData {
     date: string;
@@ -13,6 +14,17 @@ export interface RegionHistoryData {
     avgFlow: number | null;
     avgLandCover: number | null;
 }
+
+/** Response-level cache: same region + date range → skip all grid reads */
+const historyCache = new MemoryCache<RegionHistoryData[]>(60, 30 * 60 * 1000); // 30min TTL
+
+/** Static layers cache per region (DEM/slope/flow/landCover rarely change) */
+const staticLayerCache = new MemoryCache<{
+    avgDem: number | null;
+    avgSlope: number | null;
+    avgFlow: number | null;
+    avgLandCover: number | null;
+}>(10, 30 * 60 * 1000); // 30min TTL
 
 /**
  * Calculates average/sum of a grid array ignoring nodata values.
@@ -27,10 +39,6 @@ function calculateGridStats(
 
     let sum = 0;
     let count = 0;
-    // For land cover mode approximation, we might just return the most frequent, 
-    // but for simplicity, we'll return an average or just a generic stat.
-    // SoilMoisture, DEM, Slope: Average
-    // Rainfall, Flow: Sum
 
     for (let i = 0; i < dataArray.length; i++) {
         const val = dataArray[i];
@@ -50,10 +58,21 @@ function calculateGridStats(
     return parseFloat(result.toFixed(4));
 }
 
+/** Concurrency-limited daily grid fetch */
+const DAILY_CONCURRENCY = 8; // Process 8 days at a time (each day = 2 grid reads)
+
 export async function getRegionHistory(region: Region, startDateStr: string, endDateStr: string): Promise<Result<RegionHistoryData[], AppError>> {
     const t0 = Date.now();
     const bounds = REGION_BOUNDS[region];
     if (!bounds) return Err(AppErrors.validation(`Unknown region: ${region}`));
+
+    // ── Check response-level cache ──
+    const cacheKey = `reghist_${region}_${startDateStr}_${endDateStr}`;
+    const cached = historyCache.get(cacheKey);
+    if (cached) {
+        structuredLog('info', 'region_history_cached', { region, days: cached.length, durationMs: Date.now() - t0 });
+        return Ok(cached);
+    }
 
     // 1. Get timeline
     const timelineResult = await metadataService.getDates(region);
@@ -75,13 +94,11 @@ export async function getRegionHistory(region: Region, startDateStr: string, end
     const rangeDates = availableDates.filter(d => d >= startDateStr && d <= endDateStr);
     if (rangeDates.length === 0) return Ok([]);
 
-    // 2. Fetch static layers once (Since it's region level, calculating means of static maps)
-    let avgDem: number | null = null;
-    let avgSlope: number | null = null;
-    let avgFlow: number | null = null;
-    let avgLandCover: number | null = null;
+    // 2. Fetch static layers once (with dedicated cache)
+    const staticCacheKey = `static_${region}`;
+    let staticData = staticLayerCache.get(staticCacheKey);
 
-    if (rangeDates.length > 0) {
+    if (!staticData) {
         const firstDate = rangeDates[0];
         const [demRes, slopeRes, flowRes, lcRes] = await Promise.all([
             gridService.getGrid({ region: region as 'DaNang', date: firstDate as any, layer: 'dem' }),
@@ -90,43 +107,56 @@ export async function getRegionHistory(region: Region, startDateStr: string, end
             gridService.getGrid({ region: region as 'DaNang', date: firstDate as any, layer: 'landCover' })
         ]);
 
-        if (demRes.ok && demRes.value && demRes.value.data) avgDem = calculateGridStats(demRes.value.data, demRes.value.nodata, demRes.value.scale, 'avg');
-        if (slopeRes.ok && slopeRes.value && slopeRes.value.data) avgSlope = calculateGridStats(slopeRes.value.data, slopeRes.value.nodata, slopeRes.value.scale, 'avg');
-        if (flowRes.ok && flowRes.value && flowRes.value.data) avgFlow = calculateGridStats(flowRes.value.data, flowRes.value.nodata, flowRes.value.scale, 'sum');
-        if (lcRes.ok && lcRes.value && lcRes.value.data) avgLandCover = calculateGridStats(lcRes.value.data, lcRes.value.nodata, lcRes.value.scale, 'avg');
+        staticData = {
+            avgDem: (demRes.ok && demRes.value?.data) ? calculateGridStats(demRes.value.data, demRes.value.nodata, demRes.value.scale, 'avg') : null,
+            avgSlope: (slopeRes.ok && slopeRes.value?.data) ? calculateGridStats(slopeRes.value.data, slopeRes.value.nodata, slopeRes.value.scale, 'avg') : null,
+            avgFlow: (flowRes.ok && flowRes.value?.data) ? calculateGridStats(flowRes.value.data, flowRes.value.nodata, flowRes.value.scale, 'sum') : null,
+            avgLandCover: (lcRes.ok && lcRes.value?.data) ? calculateGridStats(lcRes.value.data, lcRes.value.nodata, lcRes.value.scale, 'avg') : null,
+        };
+        staticLayerCache.set(staticCacheKey, staticData);
     }
 
-    // 3. Fetch dynamic (daily) data
-    const fetchPromises = rangeDates.map(async (dateStr) => {
-        let totalRainfall: number | null = null;
-        let avgSoilMoisture: number | null = null;
+    // 3. Fetch dynamic (daily) data with CONCURRENCY LIMITER
+    const results: RegionHistoryData[] = [];
 
-        const [rainRes, smRes] = await Promise.all([
-            gridService.getGrid({ region: region as 'DaNang', date: dateStr as any, layer: 'rain' }),
-            gridService.getGrid({ region: region as 'DaNang', date: dateStr as any, layer: 'soilMoisture' })
-        ]);
+    for (let i = 0; i < rangeDates.length; i += DAILY_CONCURRENCY) {
+        const batch = rangeDates.slice(i, i + DAILY_CONCURRENCY);
+        const batchResults = await Promise.all(
+            batch.map(async (dateStr) => {
+                let totalRainfall: number | null = null;
+                let avgSoilMoisture: number | null = null;
 
-        if (rainRes.ok && rainRes.value && rainRes.value.data) {
-            totalRainfall = calculateGridStats(rainRes.value.data, rainRes.value.nodata, rainRes.value.scale, 'sum');
-        }
+                const [rainRes, smRes] = await Promise.all([
+                    gridService.getGrid({ region: region as 'DaNang', date: dateStr as any, layer: 'rain' }),
+                    gridService.getGrid({ region: region as 'DaNang', date: dateStr as any, layer: 'soilMoisture' })
+                ]);
 
-        if (smRes.ok && smRes.value && smRes.value.data) {
-            avgSoilMoisture = calculateGridStats(smRes.value.data, smRes.value.nodata, smRes.value.scale, 'avg');
-        }
+                if (rainRes.ok && rainRes.value?.data) {
+                    totalRainfall = calculateGridStats(rainRes.value.data, rainRes.value.nodata, rainRes.value.scale, 'sum');
+                }
 
-        return {
-            date: dateStr,
-            totalRainfall,
-            avgSoilMoisture,
-            avgDem,
-            avgSlope,
-            avgFlow,
-            avgLandCover
-        };
-    });
+                if (smRes.ok && smRes.value?.data) {
+                    avgSoilMoisture = calculateGridStats(smRes.value.data, smRes.value.nodata, smRes.value.scale, 'avg');
+                }
 
-    const results = await Promise.all(fetchPromises);
+                return {
+                    date: dateStr,
+                    totalRainfall,
+                    avgSoilMoisture,
+                    avgDem: staticData!.avgDem,
+                    avgSlope: staticData!.avgSlope,
+                    avgFlow: staticData!.avgFlow,
+                    avgLandCover: staticData!.avgLandCover
+                };
+            })
+        );
+        results.push(...batchResults);
+    }
+
     results.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Cache the result
+    historyCache.set(cacheKey, results);
 
     structuredLog('info', 'region_history', { region, days: results.length, durationMs: Date.now() - t0 });
     return Ok(results);
