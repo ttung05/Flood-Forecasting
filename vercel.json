@@ -1,6 +1,7 @@
 {
     "version": 2,
     "buildCommand": "npm run build",
+    "outputDirectory": "frontend",
     "installCommand": "npm install",
     "functions": {
         "api/index.js": {
@@ -9,14 +10,17 @@
             "includeFiles": "dist/**"
         }
     },
-    "rewrites": [
+    "routes": [
         {
-            "source": "/api/(.*)",
-            "destination": "/api/index.js"
+            "src": "/api/(.*)",
+            "dest": "/api/index.js"
         },
         {
-            "source": "/(.*)",
-            "destination": "/frontend/$1"
+            "handle": "filesystem"
+        },
+        {
+            "src": "/(.*)",
+            "dest": "/$1"
         }
     ],
     "headers": [
@@ -38,7 +42,7 @@
             ]
         },
         {
-            "source": "/frontend/(.*)",
+            "source": "/(.*)",
             "headers": [
                 {
                     "key": "Cache-Control",
